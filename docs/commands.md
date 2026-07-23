@@ -22,19 +22,20 @@ Commands not yet implemented (`publish`, `agent`) are tracked in the
 codavox code-id <environment>
 ```
 
-Prints the `code_id` currently deployed for an environment.
+Prints the `code_id` currently deployed for an environment, by reading the
+environment symlink.
 
-OpenVox Server runs this **on every static catalog compile**, as a fresh process,
-with no caching. It is therefore a single `open`+`read` of a state file — no
-git invocation, no directory walk, no lock, no JSON parsing.
+OpenVox Server runs this **on every static catalog compile**, as a fresh
+process, with no caching. It is therefore a single `readlink` — no git
+invocation, no directory walk, no lock, no JSON parsing.
 
 ```console
 $ codavox code-id production
 a3f1c9e4b2d8
 ```
 
-**It never invents a value.** If the state file is missing, empty, or contains
-something OpenVox Server would reject, the command fails. Emitting a generated
+**It never invents a value.** If the environment link is missing, is a real
+directory, or points somewhere outside the version layout, the command fails. Emitting a generated
 or timestamp-derived `code_id` would silently break content addressing — every
 compile would produce a different version, and no historical lookup could ever
 succeed — while appearing to work.
@@ -173,15 +174,27 @@ verified interface.
 ```text
 /opt/puppetlabs/codavox/
   versions/<env>_<code_id>/     unpacked environment trees
-  state/<env>.codeid            single line, the deployed code_id
 
 /etc/puppetlabs/code/environments/<env>
     -> /opt/puppetlabs/codavox/versions/<env>_<code_id>
 ```
 
-The environment path is a symlink, swapped atomically on deploy. Old version
-directories are retained so `code-content` can answer for a `code_id` an
-in-flight agent run is still using.
+**The symlink is the only source of truth.** `code-id` reports what the link
+resolves to, so there is no separate state file to fall out of step with it.
+
+That is a correctness requirement, not a simplification. OpenVox Server does
+two independent things when compiling a static catalog: it reads the
+environment directory, and it runs `code-id-command`. If those consulted
+different sources, every deploy would have a window where they disagreed — a
+catalog compiled from one version but stamped with another, whose file content
+then resolves against the wrong tree. No ordering avoids it: swap the link
+first and the id lags the tree; write the file first and the tree lags the id.
+
+Reading the link makes both answers the same fact. A single `rename(2)` changes
+what OpenVox Server serves and what `code-id` reports at the same instant.
+
+Old version directories are retained so `code-content` can answer for a
+`code_id` an in-flight agent run is still using.
 
 ---
 
@@ -190,6 +203,7 @@ in-flight agent run is still using.
 | variable | default | purpose |
 |---|---|---|
 | `CODAVOX_ROOT` | `/opt/puppetlabs/codavox` | Override the deployment root. Intended for tests and unprivileged runs, not production. |
+| `CODAVOX_ENVIRONMENTPATH` | `/etc/puppetlabs/code/environments` | Override OpenVox Server's environmentpath. |
 
 ---
 

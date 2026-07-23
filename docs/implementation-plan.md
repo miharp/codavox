@@ -105,7 +105,7 @@ directly. Confirm before phase 3 — it may remove the whole question.
 codavox/
   cmd/codavox/main.go
   internal/
-    codeid/        # hashing, validation, state file
+    layout/        # paths, validation, current code_id
     seal/          # staging tree -> artifact
     transport/     # interface + implementations
     agent/         # poll, fetch, swap, reap
@@ -214,12 +214,12 @@ headline number immediately.
 ```text
 /opt/puppetlabs/codavox/
   versions/<env>_<code_id>/      # unpacked trees
-  state/<env>.codeid             # single line, hex code_id
 /etc/puppetlabs/code/environments/<env> -> /opt/puppetlabs/codavox/versions/<env>_<code_id>
 ```
 
-- `codavox code-id <env>` — reads `state/<env>.codeid`, writes it to stdout.
-  One `open`+`read`. **No git, no directory walk, no lock, no JSON.**
+- `codavox code-id <env>` — reads the environment symlink and reports the
+  version it resolves to. One `readlink`. **No git, no directory walk, no
+  lock, no JSON.**
 - `codavox code-content <env> <code_id> <path>` — resolves
   `versions/<env>_<code_id>/<path>` and streams it.
 
@@ -272,14 +272,21 @@ exercise. Swap the implementation once the protocol is proven.
 1. Poll `/v1/environments` on an interval (default 30 s; jitter it).
 2. On change: fetch artifact, verify hash **before** unpacking.
 3. Unpack to `versions/<env>_<new_id>.tmp/`, then rename into place.
-4. Write `state/<env>.codeid`.
-5. Atomically swap the environment symlink — create a temp symlink, then
+4. Atomically swap the environment symlink — create a temp symlink, then
    `rename(2)` over the old one. `ln -sf` is **not** atomic; do not use it.
-6. Reap old versions: keep last N (default 3) and anything younger than TTL
+5. Reap old versions: keep last N (default 3) and anything younger than TTL
    (default 2× the longest agent run).
 
-**Order matters.** Symlink swap must land *before* the state file is updated,
-or `code-id` briefly advertises a version whose tree is not yet live.
+**There is no state file.** An earlier draft of this plan had the agent write
+`state/<env>.codeid` alongside the symlink and claimed the swap merely had to
+land first. That was wrong: with two sources of truth, *no* ordering is safe.
+Swap first and `code-id` reports the old version while OpenVox Server serves
+the new one; write first and it reports the new version while the old tree is
+still live. Either way a catalog gets compiled from one version and stamped
+with another.
+
+`code-id` therefore derives the id from the symlink itself, so one `rename(2)`
+changes both facts at once.
 
 **Pull only.** No webhook in v1 — adding one later is easy, and shipping
 without it forces the polling path to be correct.

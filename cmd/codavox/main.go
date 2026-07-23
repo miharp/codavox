@@ -9,11 +9,19 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
+	"github.com/miharp/codavox/internal/agent"
 	"github.com/miharp/codavox/internal/content"
 	"github.com/miharp/codavox/internal/layout"
 	"github.com/miharp/codavox/internal/publish"
@@ -39,6 +47,11 @@ Usage:
                   [--ssldir <dir>] [--allow-role <role>]
         Serve environment versions and artifacts to compilers over mutual TLS,
         using the Puppet CA material already on this node.
+
+  codavox agent --publisher <url> [--interval <dur>] [--once]
+                [--certname <name>] [--ssldir <dir>] [--environmentpath <dir>]
+                [--keep <n>] [--min-age <dur>]
+        Poll a publisher and converge this compiler onto the code it serves.
 
   codavox version
         Print the codavox version.
@@ -96,6 +109,8 @@ func run(cmd string, args []string) error {
 		return sealTree(args)
 	case "publish":
 		return publishServe(args)
+	case "agent":
+		return agentRun(args)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -290,4 +305,112 @@ func publishServe(args []string) error {
 
 	srv := &publish.Server{Addr: opts.listen, Store: store, TLSConfig: tlsConfig}
 	return srv.ListenAndServeTLS()
+}
+
+// agentRun polls a publisher and converges this node onto it.
+func agentRun(args []string) error {
+	opts := struct {
+		publisher string
+		certname  string
+		ssldir    string
+		envPath   string
+		interval  time.Duration
+		keep      int
+		minAge    time.Duration
+		once      bool
+	}{
+		ssldir:   puppetca.DefaultSSLDir,
+		envPath:  layout.DefaultEnvironmentPath,
+		interval: agent.DefaultInterval,
+		keep:     agent.DefaultKeep,
+		minAge:   agent.DefaultMinAge,
+	}
+
+	for i := 0; i < len(args); i++ {
+		next := func() (string, error) {
+			i++
+			if i >= len(args) {
+				return "", fmt.Errorf("%s needs a value", args[i-1])
+			}
+			return args[i], nil
+		}
+		var err error
+		var v string
+		switch args[i] {
+		case "--publisher":
+			opts.publisher, err = next()
+		case "--certname":
+			opts.certname, err = next()
+		case "--ssldir":
+			opts.ssldir, err = next()
+		case "--environmentpath":
+			opts.envPath, err = next()
+		case "--once":
+			opts.once = true
+		case "--interval":
+			if v, err = next(); err == nil {
+				opts.interval, err = time.ParseDuration(v)
+			}
+		case "--min-age":
+			if v, err = next(); err == nil {
+				opts.minAge, err = time.ParseDuration(v)
+			}
+		case "--keep":
+			if v, err = next(); err == nil {
+				opts.keep, err = strconv.Atoi(v)
+			}
+		default:
+			return fmt.Errorf("unknown argument %q", args[i])
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if opts.publisher == "" {
+		return fmt.Errorf("agent needs --publisher <url>")
+	}
+	if opts.certname == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return fmt.Errorf("determining certname: %w", err)
+		}
+		opts.certname = hostname
+	}
+
+	paths := puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}
+	tlsConfig, err := paths.ClientTLS()
+	if err != nil {
+		return err
+	}
+
+	a, err := agent.New(agent.Config{
+		BaseURL: opts.publisher,
+		Layout: layout.Layout{
+			Root:            layout.New().Root,
+			EnvironmentPath: opts.envPath,
+		},
+		Client: &http.Client{
+			Timeout:   30 * time.Minute, // environments can be large
+			Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		},
+		Interval: opts.interval,
+		Keep:     opts.keep,
+		MinAge:   opts.minAge,
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if opts.once {
+		return a.Once(ctx)
+	}
+
+	if err := a.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
 }

@@ -41,7 +41,6 @@ resolution, upgrade, and clean uninstall in the meantime.
 /usr/bin/codavox-code-id       -> codavox
 /usr/bin/codavox-code-content  -> codavox
 /opt/puppetlabs/codavox/versions/
-/opt/puppetlabs/codavox/state/
 ```
 
 The two symlinks exist because OpenVox Server passes only positional arguments
