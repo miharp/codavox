@@ -44,13 +44,14 @@ func Copy(w io.Writer, l layout.Layout, env, codeID, path string) error {
 		}
 		return fmt.Errorf("opening version directory: %w", err)
 	}
-	defer root.Close()
+	// Close errors on a read-only handle carry no information.
+	defer func() { _ = root.Close() }()
 
 	f, err := root.Open(strings.TrimPrefix(path, "/"))
 	if err != nil {
 		return fmt.Errorf("opening %q in %s: %w", path, codeID, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {

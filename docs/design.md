@@ -62,7 +62,7 @@ is the constraint that forces central staging plus artifact distribution.
 ### Two properties to preserve
 
 **Pull, not push.** Polling is self-healing; a compiler that was down catches
-up on its next tick. Webhooks are acceptable *only* as a latency optimisation
+up on its next tick. Webhooks are acceptable *only* as a latency optimization
 layered on top, never as the correctness mechanism.
 
 **Versioned directories from day one.** Deploying into a fresh
@@ -84,7 +84,7 @@ plane. mTLS between compilers and primary comes free off the existing Puppet CA.
 | --- | --- | --- |
 | **bare git repo** | delta transfer, resumable, versioning + dedup free | needs a git endpoint; checkout of huge trees is slowish |
 | **OCI artifact** | layer dedup, registries everywhere with auth/mirroring/CDN solved; fits Vox Pupuli's container investment | new infra dependency |
-| **tarball over HTTPS + hash** | dumbest thing that works | no dedup; poor at scale |
+| **tarball over HTTPS + hash** | simplest option that works | no dedup; poor at scale |
 
 Git or OCI. OCI is the most modern fit given where Vox Pupuli already invests.
 
@@ -136,6 +136,7 @@ do not pay for it in source coupling.
   rugged for r10k considerably. **Highest-value unknown.**
 - Whether the agent should reuse r10k's Puppetfile resolution or treat the
   staged tree as fully opaque. (Leaning opaque.)
+
 ## Name
 
 `codavox` was checked and is unclaimed on GitHub (zero repositories), RubyGems,

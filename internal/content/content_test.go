@@ -54,7 +54,7 @@ func TestCopy(t *testing.T) {
 		}
 	})
 
-	// The defining behaviour. The shell baseline fell back to reading the
+	// The defining behavior. The shell baseline fell back to reading the
 	// current filesystem when its lookup missed, exiting 0 while serving
 	// content from the wrong version — a silent correctness failure that
 	// defeats the purpose of static catalogs.
