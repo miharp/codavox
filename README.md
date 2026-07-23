@@ -47,6 +47,7 @@ never a silent fall back to whatever is current.
 
 | document | contents |
 |---|---|
+| [sealing.md](docs/sealing.md) | How a code_id is derived, what is excluded, and why |
 | [commands.md](docs/commands.md) | Command reference, exit codes, puppetserver wiring, on-disk layout |
 | [design.md](docs/design.md) | Architecture, transport options, repo layout, known hard parts |
 | [implementation-plan.md](docs/implementation-plan.md) | Phased build order, test topology, integration tests |
