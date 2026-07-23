@@ -72,10 +72,6 @@ nfpms:
         type: dir
         file_info:
           mode: 0755
-      - dst: /opt/puppetlabs/codavox/state
-        type: dir
-        file_info:
-          mode: 0755
 
     rpm:
       group: System Environment/Base
