@@ -23,6 +23,8 @@ mid-run via static catalogs.
 
 - [design.md](docs/design.md) — architecture, transport options, repo layout,
   known hard parts
+- [implementation-plan.md](docs/implementation-plan.md) — phased build order,
+  Vagrant test topology, and the integration tests that justify the project
 - [versioned-code-contract.md](docs/versioned-code-contract.md) — the verified
   puppetserver interface, its validation rules, and the performance constraint
   that drives the language choice
