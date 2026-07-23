@@ -63,9 +63,15 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - uses: golangci/golangci-lint-action@v6
+      # v8 is the first action line that installs golangci-lint v2. The v6
+      # action pins v1.x, which cannot parse a `version: "2"` config and
+      # refuses to target a module newer than the Go it was built with.
+      #
+      # The version is pinned rather than tracking latest so a new golangci
+      # release cannot break CI on an unrelated pull request.
+      - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.12.2
 
   test:
     name: Unit tests
