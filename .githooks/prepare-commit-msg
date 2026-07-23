@@ -1,0 +1,22 @@
+#!/bin/sh
+# Append a DCO Signed-off-by trailer if one is not already present.
+#
+# OpenVox projects require DCO sign-off (`git commit -s`). Relying on the flag
+# means it is forgotten exactly once, and fixing that afterwards means
+# rewriting history. The hook makes it automatic.
+#
+# Enable with: git config core.hooksPath .githooks
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+name=$(git config user.name)
+email=$(git config user.email)
+[ -n "$name" ] && [ -n "$email" ] || exit 0
+
+trailer="Signed-off-by: $name <$email>"
+
+# grep -F: the trailer contains regex metacharacters in the email/name.
+if ! grep -qF "$trailer" "$msg_file"; then
+    printf '\n%s\n' "$trailer" >> "$msg_file"
+fi
