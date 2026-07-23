@@ -3,7 +3,8 @@
 Written 2026-07-23. Companion to [design.md](design.md) and
 [versioned-code-contract.md](versioned-code-contract.md).
 
-Integration testing targets `~/projects/control-repo` on Vagrant/Parallels.
+Integration testing runs on `~/projects/ovadm`'s Docker Compose environment,
+with `~/projects/control-repo` on Vagrant as a higher-fidelity tier-2 check.
 
 ---
 
@@ -30,33 +31,71 @@ latency number using nothing but the existing repo.
 
 ---
 
-## 1. Topology
+## 1. Topology — ovadm Docker (primary harness)
 
-The current Vagrantfile has no compiler — the primary serves catalogs directly,
-and `control-repo` is a *synced folder* mounted straight into
-`/etc/puppetlabs/code/environments/production`. Neither survives contact with
-codavox: compilers must receive code, not mount it.
+Use `~/projects/ovadm`'s Docker Compose environment, not a hand-built Vagrant
+topology. It already provides exactly what codavox needs:
 
-Proposed additions (keep existing nodes intact so current workflows keep working):
+- `ovadm-server` (Rocky 9 + systemd, CA), `ovadm-compiler01`, `ovadm-agent`
+- The agent is pre-pointed at **compiler01** for catalogs via
+  `docker/agent-puppet.conf` — the compiler is already in the catalog path
+- `ovadm::add_compiler` handles install, `puppet.conf`, CSR submission,
+  signing, SSL, and service start in one plan
 
-| node | IP | role |
-|---|---|---|
-| `puppet` | 192.168.56.10 | primary + **publisher**; runs r10k and `codavox publish`. Keeps its synced folder — it is the staging source. |
-| `compiler01` | 192.168.56.13 | openvox-server + `codavox agent`. **No synced folder.** |
-| `compiler02` | 192.168.56.14 | openvox-server + `codavox agent`. **No synced folder.** Second compiler is non-negotiable — convergence between two is the property under test. |
-| `agent01` | 192.168.56.11 | existing; repointed at a compiler for static-catalog tests |
-| `agent02` | 192.168.56.12 | existing (Ubuntu) |
+It also stamps `pp_role: openvox_compiler` into the compiler certificate, so
+`$trusted['extensions']['pp_role']` classifies which nodes get the codavox
+agent — no ENC, no node list to maintain. That is a better fit than anything
+the Vagrant setup offers.
 
-**Memory:** primary 3 GB + 2 compilers @ 2 GB + 2 agents @ 1 GB = 9 GB. Tight
-but workable on an M2 Pro. Put the compilers behind a `CODAVOX_TEST=1` guard so
-the default `vagrant up` cost is unchanged for everyday control-repo work.
+**Adding `compiler02`** — required, since convergence *between* compilers is
+the property under test and a single compiler makes it unobservable:
 
-Keep `VAGRANT_NO_PARALLEL=1`, autosign `*`, and the existing chrony
-clock-skew workaround — clock skew would produce confusing TTL/reaping failures.
+- `docker-compose.yml`: copy the `compiler01` service block, change
+  `container_name` and `hostname`
+- `docker/inventory.yaml`: one more `docker://ovadm-compiler02` target
+- `bolt plan run ovadm::add_compiler server_host=puppet compiler_hosts=compiler01,compiler02`
 
-**Open question to settle early:** do compilers need their own CA relationship,
-or do they act as pure catalog compilers against the primary's CA? This changes
-the mTLS story for artifact fetch. Resolve before phase 4.
+Node roles for codavox:
+
+| container | role |
+|---|---|
+| `ovadm-server` | CA + **publisher**; stages code and runs `codavox publish` |
+| `ovadm-compiler01` | openvox-server + `codavox agent` |
+| `ovadm-compiler02` | openvox-server + `codavox agent` |
+| `ovadm-agent` | catalog verification; already targets a compiler |
+
+### Why this beats Vagrant here
+
+- **Iteration speed.** codavox is poll-driven; the test loop runs constantly.
+  `docker compose up -d` against a 5-VM, 9 GB Parallels topology is not close.
+- **The catch-up test becomes trivial.** Test 2 is `docker stop ovadm-compiler02`
+  → deploy → `docker start`. In Vagrant that is a slow `halt`/`up` cycle.
+- **Partition testing becomes possible.** `docker network disconnect` lets us
+  simulate a compiler that is up but unreachable — distinct from one that is
+  down, and a case polling must handle. That is awkward to stage in Vagrant.
+- **Compilers already exist.** No new provisioning to write or maintain.
+
+### One setup detail that matters
+
+Mount `/opt/puppetlabs/codavox` as a **named volume, not overlayfs**. Atomic
+symlink swap is a core correctness claim, and testing rename semantics on a
+container's overlay filesystem risks either false confidence or spurious
+failures. Put the versions tree on a real filesystem.
+
+### Vagrant as tier 2
+
+Keep `control-repo` on Vagrant as a **higher-fidelity check before any
+release**, not as the working loop. Containers share a kernel and do not
+exercise SELinux file contexts, firewalld, or true systemd timer behaviour —
+all of which a real deployment hits. Run the suite there at phase 5, not on
+every change.
+
+`control-repo` remains valuable regardless as the **A/B baseline**: it has the
+existing `profile::static_catalogs` to measure against.
+
+**Open question to settle early:** compilers already get certs from the
+server's CA via `add_compiler`, so artifact-fetch mTLS can likely reuse them
+directly. Confirm before phase 3 — it may remove the whole question.
 
 ---
 
@@ -81,7 +120,7 @@ codavox/
 - Single static binary, no cgo, so it drops onto any compiler with no runtime.
 - Cross-compile matrix: `linux/amd64`, `linux/arm64` at minimum.
 - CI: build, `go vet`, `golangci-lint`, unit tests. Integration tests are
-  Vagrant-gated and run locally, not in CI initially.
+  Docker-gated and run locally, not in CI initially.
 
 ---
 
@@ -181,7 +220,7 @@ closely on the existing profile; that profile is the reference.
 
 ## 7. Integration tests
 
-Under `test/integration/`, driven by Vagrant. Each maps to a specific claim
+Under `test/integration/`, driven by the ovadm Docker topology. Each maps to a specific claim
 in [design.md](design.md):
 
 1. **Convergence** — deploy; both compilers report the same code_id within one
@@ -210,7 +249,7 @@ Tests 2 and 4 are the ones that justify the project. Write them first.
 |---|---|---|
 | 1 | `code-id` / `code-content` + benchmark vs baseline | latency number published |
 | 2 | `publish` + reproducible sealing | same tree → same id, twice, two machines |
-| 3 | `agent` + Vagrant compilers | tests 1, 2, 3 pass |
+| 3 | `agent` + `compiler02` added to ovadm compose | tests 1, 2, 3 pass |
 | 4 | Forge module | control-repo can A/B baseline vs codavox |
 | 5 | tests 4-7 | full suite green |
 | 6 | transport swap (git or OCI) | behind the interface, no protocol change |
