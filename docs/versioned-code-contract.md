@@ -1,9 +1,8 @@
 # The `versioned-code-service` contract
 
-Everything here was verified by reading source, not documentation. Sources:
+Everything here was verified by reading source, not documentation.
 
-- `~/projects/openvox-server` @ `a2e0bb8a`
-- PE 2025.11.0 packages (`pe-puppetserver`, `pe-modules`, `pe-r10k`)
+Source: `~/projects/openvox-server` @ `a2e0bb8a`
 
 This is the interface `stagehand` must satisfy. It is stable, open source, and
 already enabled in shipped openvox-server packages — **no server changes are
@@ -16,15 +15,14 @@ openvox-server, and the service is registered in
 `ezbake/system-config/services.d/bootstrap.cfg` — the *packaging* bootstrap, not
 merely the dev one:
 
-```
+```text
 puppetlabs.services.versioned-code-service.versioned-code-service/versioned-code-service
 ```
 
-PE swaps in its own implementation of the same interface
-(`puppetlabs.enterprise.services.file-sync.file-sync-versioned-code-service`),
-compiled into `puppet-server-release.jar` alongside the OSS one. File sync is
-*an* implementation of this hook, not the mechanism itself. That is precisely
-why stagehand can exist without touching the server.
+The service is a pluggable hook: puppetserver delegates "what is the current
+code version" and "give me file X at version Y" to two external commands. Any
+implementation that satisfies the contract below works, which is why stagehand
+can exist entirely outside the server.
 
 ## Configuration
 
@@ -45,7 +43,7 @@ versioned-code: {
 
 ## The two commands
 
-```
+```text
 code-id-command      <environment>                        -> stdout = code_id
 code-content-command <environment> <code-id> <file-path>  -> stdout = file bytes
 ```
@@ -94,31 +92,20 @@ At 1000 nodes on a 30-minute interval that is ~33 spawns/sec across the fleet,
 on the critical path of every compile:
 
 | implementation | approx startup | CPU per wall-clock second |
-|---|---|---|
+| --- | --- | --- |
 | Go/Rust static binary | 1-2 ms | negligible |
 | shell script (readlink) | 1-2 ms | negligible |
 | Ruby script | ~100 ms | ~3 s — unusable |
 
-This is almost certainly why PE bypassed the script hook entirely with an
-in-process service. It is the single strongest argument that the compiler-side
-components must be compiled binaries, and it rules out the otherwise-natural
-instinct to write them in Ruby.
+This is the single strongest argument that the compiler-side components must be
+compiled binaries, and it rules out the otherwise-natural instinct to write
+them in Ruby.
 
 **Design consequence:** the answer only changes at deploy time, so the agent
 should write the current code_id to a small file and `code-id-command` becomes
 a single `read` syscall — no git invocation, no directory walk, no lock.
 
-## Corroborating evidence from PE
-
-- `puppet_enterprise::master::file_sync_disabled` exists specifically to turn
-  file sync off and let an operator supply their own two commands. It registers
-  the OSS `versioned-code-service` and writes exactly the config above. PE
-  ships the seam deliberately.
-- `parse_code_mgmt_git_config.rb` hardcodes `'provider' => git_provider || 'rugged'`.
-- Code Manager deploy-pool workers **shell out** to r10k, one environment per
-  worker (`deploy_pool_size = 2`, `download_pool_size = 4`); each worker holds
-  its own cache copy, which is how PE sidesteps the shared-cachedir race that
-  r10k commit `e27a5d14` (#1058) fixed by serialising.
-- PE is deprecating non-versioned deploys: `code_management.pp` warns the
-  `versioned_deploys` default will flip `false` -> `true`. Build versioned-dir
-  + symlink-swap from day one; do not build the thing they are retiring.
+If per-compile spawn cost ever proves too high even for a compiled binary, the
+fallback is to implement an in-JVM service satisfying the same protocol inside
+openvox-server. That is an escape hatch to reach for with measurements in hand,
+not a starting point.
