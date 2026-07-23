@@ -5,10 +5,12 @@ open-source `versioned-code-service` hook.
 
 > A *coda* is the passage that brings every performance to the same close.
 
-**Status: early development.** All five commands — `code-id`, `code-content`,
-`seal`, `publish` and `agent` — work and are tested end to end, including two
-compilers converging over mutual TLS. Not yet run against a real OpenVox Server;
-see the [implementation plan](docs/implementation-plan.md).
+**Status: early development.** All five commands work, and the full chain has
+been run against real OpenVox Server processes: two compilers converging over
+mutual TLS, a compiler catching up after missing a deploy, and an agent
+receiving a static catalog stamped with the codavox `code_id`. See
+[test/integration](test/integration/) and the
+[implementation plan](docs/implementation-plan.md).
 
 ## Why
 

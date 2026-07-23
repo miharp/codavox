@@ -383,3 +383,33 @@ func writeArchiveOf(t *testing.T, w io.Writer, dir string) {
 		t.Error(err)
 	}
 }
+
+// OpenVox Server reads deployed trees as the puppet user while the agent runs
+// as root. os.MkdirTemp creates 0700, so without an explicit chmod every
+// catalog compile fails with EACCES — a failure no same-user test can see.
+func TestDeployedVersionIsReadableByOtherUsers(t *testing.T) {
+	f := newFixture(t)
+	id := f.publishEnv(t, "production", map[string]string{"environment.conf": "modulepath = modules\n"})
+
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := f.layout.VersionDir("production", id)
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perm := info.Mode().Perm()
+	if perm&0o055 != 0o055 {
+		t.Errorf("version directory mode is %#o; puppetserver cannot traverse it (want at least r-x for group and other)", perm)
+	}
+
+	fi, err := os.Stat(filepath.Join(dir, "environment.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm()&0o044 != 0o044 {
+		t.Errorf("environment.conf mode is %#o; puppetserver cannot read it", fi.Mode().Perm())
+	}
+}

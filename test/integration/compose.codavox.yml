@@ -1,0 +1,34 @@
+---
+# Layered over ovadm's docker-compose.yml to add a second compiler.
+#
+#   docker compose \
+#     -f ~/projects/ovadm/docker-compose.yml \
+#     -f test/integration/compose.codavox.yml up -d
+#
+# An override rather than a change to ovadm: convergence *between* compilers is
+# the property under test, so codavox needs a topology ovadm has no reason to
+# carry. Relative build contexts resolve against the first compose file, so
+# `build: docker` still finds ovadm's Dockerfile.
+
+services:
+  compiler02:
+    build: docker
+    container_name: ovadm-compiler02
+    hostname: compiler02
+    privileged: true
+    networks:
+      - ovadm
+    volumes:
+      - codavox-compiler02:/opt/puppetlabs/codavox
+
+  # Version directories live on a named volume rather than the container's
+  # overlay filesystem. Atomic symlink swap is a core correctness claim, and
+  # testing rename semantics on overlayfs risks either false confidence or
+  # spurious failures.
+  compiler01:
+    volumes:
+      - codavox-compiler01:/opt/puppetlabs/codavox
+
+volumes:
+  codavox-compiler01:
+  codavox-compiler02:

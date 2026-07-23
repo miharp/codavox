@@ -214,7 +214,7 @@ headline number immediately.
 ```text
 /opt/puppetlabs/codavox/
   versions/<env>_<code_id>/      # unpacked trees
-/etc/puppetlabs/code/environments/<env> -> /opt/puppetlabs/codavox/versions/<env>_<code_id>
+/opt/puppetlabs/codavox/environments/<env> -> versions/<env>_<code_id>
 ```
 
 - `codavox code-id <env>` — reads the environment symlink and reports the

@@ -175,7 +175,7 @@ verified interface.
 /opt/puppetlabs/codavox/
   versions/<env>_<code_id>/     unpacked environment trees
 
-/etc/puppetlabs/code/environments/<env>
+/opt/puppetlabs/codavox/environments/<env>
     -> /opt/puppetlabs/codavox/versions/<env>_<code_id>
 ```
 
@@ -203,7 +203,7 @@ Old version directories are retained so `code-content` can answer for a
 | variable | default | purpose |
 |---|---|---|
 | `CODAVOX_ROOT` | `/opt/puppetlabs/codavox` | Override the deployment root. Intended for tests and unprivileged runs, not production. |
-| `CODAVOX_ENVIRONMENTPATH` | `/etc/puppetlabs/code/environments` | Override OpenVox Server's environmentpath. |
+| `CODAVOX_ENVIRONMENTPATH` | `/opt/puppetlabs/codavox/environments` | Override OpenVox Server's environmentpath. |
 
 ---
 
