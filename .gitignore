@@ -1,0 +1,11 @@
+# Binaries
+/codavox
+/dist/
+*.exe
+
+# Test artifacts
+*.out
+*.test
+
+# Editor
+.DS_Store
