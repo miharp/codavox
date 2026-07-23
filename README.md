@@ -1,7 +1,7 @@
 # stagehand
 
-Versioned code distribution for OpenVox compilers — a Code Manager equivalent
-built on puppetserver's open-source `versioned-code-service` hook.
+Versioned code distribution for OpenVox compilers, built on puppetserver's
+open-source `versioned-code-service` hook.
 
 > A stagehand moves the set pieces into position so every performance is
 > identical.
