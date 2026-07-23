@@ -1,0 +1,35 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "HOCON",
+    "behaviour",
+    "certname",
+    "codavox",
+    "codeid",
+    "confdir",
+    "environmentpath",
+    "firewalld",
+    "golangci",
+    "inventoryfile",
+    "openvox",
+    "openvoxserver",
+    "ovadm",
+    "overlayfs",
+    "puppetdb",
+    "puppetlabs",
+    "puppetserver",
+    "rugged",
+    "trapperkeeper",
+    "voxpupuli"
+  ],
+  "ignoreRegExpList": [
+    "/`[^`]*`/",
+    "/```[\\s\\S]*?```/"
+  ],
+  "ignorePaths": [
+    ".git/**",
+    "**/*.sum",
+    "**/vendor/**"
+  ]
+}
