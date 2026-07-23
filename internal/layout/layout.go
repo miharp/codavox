@@ -17,8 +17,23 @@ import (
 // DefaultRoot is where deployed environment versions live.
 const DefaultRoot = "/opt/puppetlabs/codavox"
 
-// DefaultEnvironmentPath matches OpenVox Server's default environmentpath.
-const DefaultEnvironmentPath = "/etc/puppetlabs/code/environments"
+// DefaultEnvironmentPath is a codavox-owned directory that OpenVox Server is
+// pointed at, deliberately *not* the stock /etc/puppetlabs/code/environments.
+//
+// A freshly installed OpenVox Server ships a populated skeleton at
+// code/environments/production — data, environment.conf, hiera.yaml, manifests
+// and modules. rename(2) cannot replace a real directory with a symlink, so
+// managing that path would mean either refusing to start or moving an
+// operator's directory aside on first run. Worse, that directory may hold code
+// somebody deployed by other means, and taking it over would make it vanish
+// from where they left it.
+//
+// Owning a separate codedir avoids the collision entirely: codavox creates it,
+// only ever puts symlinks in it, and the stock path is left untouched for
+// anyone still using it. Point OpenVox Server at it with:
+//
+//	puppet config set --section main environmentpath /opt/puppetlabs/codavox/environments
+const DefaultEnvironmentPath = "/opt/puppetlabs/codavox/environments"
 
 // RootEnvVar and EnvironmentPathEnvVar override the defaults. Intended for
 // tests and for running the binary as an unprivileged user.

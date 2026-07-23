@@ -230,6 +230,15 @@ func (a *Agent) download(ctx context.Context, env, codeID string) error {
 		return fmt.Errorf("artifact for %s does not match its code_id: got %s, want %s", env, got, codeID)
 	}
 
+	// os.MkdirTemp creates 0700. OpenVox Server reads this tree as the puppet
+	// user while the agent runs as root, so leaving it private means every
+	// catalog compile fails with EACCES on environment.conf. Files inside are
+	// already normalized to 0644/0755 during extraction; only the directory
+	// the temp helper created needs widening.
+	if err := os.Chmod(tmp, 0o755); err != nil { // #nosec G302
+		return fmt.Errorf("setting permissions on %s: %w", tmp, err)
+	}
+
 	if err := os.Rename(tmp, final); err != nil {
 		// Another agent process may have won the race; that is fine, since the
 		// content is identical by construction.

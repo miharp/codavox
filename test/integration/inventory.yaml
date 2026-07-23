@@ -1,0 +1,23 @@
+---
+# Inventory for the codavox integration topology: ovadm's three nodes plus a
+# second compiler. Used with ovadm's bolt plans.
+targets:
+  - name: puppet
+    uri: docker://ovadm-server
+    config:
+      transport: docker
+
+  - name: compiler01
+    uri: docker://ovadm-compiler01
+    config:
+      transport: docker
+
+  - name: compiler02
+    uri: docker://ovadm-compiler02
+    config:
+      transport: docker
+
+  - name: agent
+    uri: docker://ovadm-agent
+    config:
+      transport: docker

@@ -23,7 +23,7 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 | `--interval` | `30s` | Poll interval |
 | `--certname` | system hostname | This node's Puppet certname |
 | `--ssldir` | `/etc/puppetlabs/puppet/ssl` | Puppet SSL directory |
-| `--environmentpath` | `/etc/puppetlabs/code/environments` | Where environment links live |
+| `--environmentpath` | `/opt/puppetlabs/codavox/environments` | Where environment links live |
 | `--keep` | `3` | Superseded versions retained per environment |
 | `--min-age` | `2h` | Minimum retention regardless of `--keep` |
 
@@ -37,6 +37,25 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 5. Rename the temporary directory into place.
 6. Atomically swap the environment symlink.
 7. Reap superseded versions.
+
+## codavox owns its codedir
+
+codavox manages `/opt/puppetlabs/codavox/environments`, **not** the stock
+`/etc/puppetlabs/code/environments`. Point OpenVox Server at it:
+
+```console
+puppet config set --section main environmentpath /opt/puppetlabs/codavox/environments
+```
+
+This is not a preference. A freshly installed OpenVox Server ships a populated
+skeleton at `code/environments/production` — `data`, `environment.conf`,
+`hiera.yaml`, `manifests`, `modules` — and `rename(2)` cannot replace a real
+directory with a symlink. Managing that path would mean either refusing to
+start or moving an operator's directory aside on first run, and that directory
+may hold code deployed by other means.
+
+Owning a separate codedir avoids the collision entirely, and leaves the stock
+path untouched for anyone still using it.
 
 ## Pull, not push
 
