@@ -1,0 +1,99 @@
+---
+version: 2
+
+project_name: codavox
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: codavox
+    main: ./cmd/codavox
+    binary: codavox
+    env:
+      # No cgo, so the binary carries no runtime dependency and the same
+      # artifact installs on every glibc and musl distro in the test estate.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      # arm64 is not secondary: Parallels VMs and Docker on Apple silicon are
+      # both aarch64, so it is the primary local test target.
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: codavox
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+nfpms:
+  - id: codavox
+    package_name: codavox
+    vendor: Michael Harp
+    homepage: https://github.com/miharp/codavox
+    maintainer: Michael Harp <mike@mikeharp.com>
+    license: Apache-2.0
+    description: |-
+      Versioned code distribution for OpenVox compilers.
+
+      Implements OpenVox Server's versioned-code-service contract, serving a
+      stable code_id per environment and file content addressed by that id.
+    formats:
+      - rpm
+      - deb
+
+    # /usr/bin, not /opt/puppetlabs/bin: that directory is owned by the
+    # openvox-agent package and shipping into it invites file conflicts on
+    # upgrade. versioned-code.conf takes an absolute path, so co-locating
+    # buys nothing.
+    bindir: /usr/bin
+
+    contents:
+      # OpenVox Server passes only positional arguments to code-id-command,
+      # so it cannot invoke `codavox code-id`. The binary dispatches on
+      # argv[0], so these symlinks give each setting a path to point at.
+      # A shell wrapper would work too, but would add a fork to a path that
+      # runs on every catalog compile.
+      - src: /usr/bin/codavox
+        dst: /usr/bin/codavox-code-id
+        type: symlink
+      - src: /usr/bin/codavox
+        dst: /usr/bin/codavox-code-content
+        type: symlink
+
+      - dst: /opt/puppetlabs/codavox/versions
+        type: dir
+        file_info:
+          mode: 0755
+      - dst: /opt/puppetlabs/codavox/state
+        type: dir
+        file_info:
+          mode: 0755
+
+    rpm:
+      group: System Environment/Base
+    deb:
+      fields:
+        Bugs: https://github.com/miharp/codavox/issues
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
