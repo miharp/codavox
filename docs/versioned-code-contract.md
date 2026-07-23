@@ -48,13 +48,13 @@ code-id-command      <environment>                        -> stdout = code_id
 code-content-command <environment> <code-id> <file-path>  -> stdout = file bytes
 ```
 
-Behaviour, from `versioned_code_core.clj`:
+Behavior, from `versioned_code_core.clj`:
 
 - **Exit 0 is mandatory.** Non-zero throws `IllegalStateException` carrying
   exit code, stdout and stderr into the server log.
 - **stderr on a zero exit is tolerated but logged at ERROR level.** Keep both
   commands silent on success or the log fills at one line per catalog compile.
-- code-id stdout is `trim-newline`'d. Nothing else is normalised — there is an
+- code-id stdout is `trim-newline`'d. Nothing else is normalized — there is an
   explicit `TODO` in the source about control characters and encodings, so do
   not emit anything exotic.
 - code-content uses `execute-command-streamed`, so file bytes stream rather
@@ -76,7 +76,7 @@ Both from `src/clj/puppetlabs/puppetserver/common.clj`:
   is fine. A base64 or otherwise padded content hash will be **rejected at
   runtime** by `get-current-code-id!`. Use hex.
 - **Environment names are `\w+` only.** This happens to agree with r10k, which
-  sanitises `\W` -> `_` (`lib/r10k/action/deploy/environment.rb:41`), but the
+  sanitizes `\W` -> `_` (`lib/r10k/action/deploy/environment.rb:41`), but the
   two agree by coincidence rather than contract. Test it explicitly.
 
 ## The performance constraint (this drives the language choice)

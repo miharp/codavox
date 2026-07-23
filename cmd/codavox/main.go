@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/miharp/codavox/internal/content"
 	"github.com/miharp/codavox/internal/layout"
@@ -35,13 +36,37 @@ Environment:
 // version is overridden at build time via -ldflags.
 var version = "dev"
 
+// argv0Commands maps an invocation name to the subcommand it implies.
+//
+// puppetserver passes only positional arguments to code-id-command and
+// code-content-command, so neither setting can point at a binary that expects
+// a subcommand first. Dispatching on argv[0] lets a symlink stand in:
+//
+//	/usr/bin/codavox-code-id -> codavox
+//
+// A shell wrapper would also work, but it would add a shell fork to a path
+// that runs on every catalog compile. A symlink costs nothing.
+var argv0Commands = map[string]string{
+	"codavox-code-id":      "code-id",
+	"codavox-code-content": "code-content",
+}
+
 func main() {
+	if cmd, ok := argv0Commands[filepath.Base(os.Args[0])]; ok {
+		dispatch(cmd, os.Args[1:])
+		return
+	}
+
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, usage, layout.DefaultRoot)
 		os.Exit(2)
 	}
 
-	if err := run(os.Args[1], os.Args[2:]); err != nil {
+	dispatch(os.Args[1], os.Args[2:])
+}
+
+func dispatch(cmd string, args []string) {
+	if err := run(cmd, args); err != nil {
 		fmt.Fprintf(os.Stderr, "codavox: %v\n", err)
 		os.Exit(1)
 	}
@@ -57,8 +82,8 @@ func run(cmd string, args []string) error {
 		fmt.Println(version)
 		return nil
 	case "-h", "--help", "help":
-		fmt.Fprintf(os.Stdout, usage, layout.DefaultRoot)
-		return nil
+		_, err := fmt.Fprintf(os.Stdout, usage, layout.DefaultRoot)
+		return err
 	default:
 		return fmt.Errorf("unknown subcommand %q (try 'codavox help')", cmd)
 	}

@@ -86,7 +86,7 @@ failures. Put the versions tree on a real filesystem.
 
 Keep `control-repo` on Vagrant as a **higher-fidelity check before any
 release**, not as the working loop. Containers share a kernel and do not
-exercise SELinux file contexts, firewalld, or true systemd timer behaviour —
+exercise SELinux file contexts, firewalld, or true systemd timer behavior —
 all of which a real deployment hits. Run the suite there at phase 5, not on
 every change.
 
@@ -187,7 +187,7 @@ is never itself a config change.
 
 For the POC, publish artifacts to GitHub Releases and install by direct URL:
 
-```bash
+```console
 dnf install https://github.com/<org>/codavox/releases/download/v0.1.0/codavox-0.1.0.aarch64.rpm
 ```
 
@@ -227,7 +227,7 @@ headline number immediately.
 
 - **Never fall back to current filesystem state on a code_id miss.** Exit
   non-zero. A hard failure the operator sees beats silently serving the wrong
-  version. This is the single most important behavioural difference from the
+  version. This is the single most important behavioral difference from the
   baseline.
 - **Never emit a timestamp** or any non-deterministic id.
 - Validate the code_id against `[a-zA-Z0-9_\-:;]` before use; reject path
@@ -282,7 +282,7 @@ exercise. Swap the implementation once the protocol is proven.
 or `code-id` briefly advertises a version whose tree is not yet live.
 
 **Pull only.** No webhook in v1 — adding one later is easy, and shipping
-without it forces the polling path to actually be correct.
+without it forces the polling path to be correct.
 
 ---
 

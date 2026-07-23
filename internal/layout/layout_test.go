@@ -15,7 +15,7 @@ func TestValidateEnvironment(t *testing.T) {
 		}
 	}
 
-	// r10k sanitises \W to _ when naming environments, so these should never
+	// r10k sanitizes \W to _ when naming environments, so these should never
 	// reach us in practice — but puppetserver rejects them, so we must too.
 	invalid := []string{"", "my-env", "my.env", "my/env", "my env", "env!"}
 	for _, env := range invalid {
