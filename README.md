@@ -5,8 +5,8 @@ open-source `versioned-code-service` hook.
 
 > A *coda* is the passage that brings every performance to the same close.
 
-**Status: early development.** The `code-id` and `code-content` commands work
-and are tested. `publish` and `agent` are not yet implemented — see the
+**Status: early development.** `code-id`, `code-content`, `seal` and `publish`
+work and are tested. The compiler-side `agent` is not yet implemented — see the
 [implementation plan](docs/implementation-plan.md).
 
 ## Why
@@ -47,6 +47,7 @@ never a silent fall back to whatever is current.
 
 | document | contents |
 |---|---|
+| [publishing.md](docs/publishing.md) | Running the publisher, mutual TLS, and the role constraint |
 | [sealing.md](docs/sealing.md) | How a code_id is derived, what is excluded, and why |
 | [commands.md](docs/commands.md) | Command reference, exit codes, puppetserver wiring, on-disk layout |
 | [design.md](docs/design.md) | Architecture, transport options, repo layout, known hard parts |
