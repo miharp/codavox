@@ -1,0 +1,58 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Lets the packaging path be exercised without cutting a release.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser derives the version and changelog from tag history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # A tag that fails its own tests is worse than a missing release, and a
+      # tag push cannot be un-published cleanly.
+      - name: Verify before releasing
+        run: |
+          gofmt -l . | tee /tmp/unformatted
+          test ! -s /tmp/unformatted
+          go vet ./...
+          go test -race ./...
+
+      - name: Release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          # A manual dispatch has no tag to release, so build a snapshot and
+          # keep the artifacts rather than failing.
+          args: >-
+            release --clean
+            ${{ github.event_name == 'workflow_dispatch' && '--snapshot --skip=publish' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: |
+            dist/*.rpm
+            dist/*.deb
+            dist/*.tar.gz
+          retention-days: 14
