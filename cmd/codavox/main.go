@@ -16,6 +16,8 @@ import (
 
 	"github.com/miharp/codavox/internal/content"
 	"github.com/miharp/codavox/internal/layout"
+	"github.com/miharp/codavox/internal/publish"
+	"github.com/miharp/codavox/internal/puppetca"
 	"github.com/miharp/codavox/internal/seal"
 )
 
@@ -32,6 +34,11 @@ Usage:
         Print the code_id for a staged environment tree. With --manifest,
         print the canonical manifest instead. With --archive, also write a
         deterministic artifact.
+
+  codavox publish --staging <dir> [--listen <addr>] [--certname <name>]
+                  [--ssldir <dir>] [--allow-role <role>]
+        Serve environment versions and artifacts to compilers over mutual TLS,
+        using the Puppet CA material already on this node.
 
   codavox version
         Print the codavox version.
@@ -87,6 +94,8 @@ func run(cmd string, args []string) error {
 		return codeContent(args)
 	case "seal":
 		return sealTree(args)
+	case "publish":
+		return publishServe(args)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -197,4 +206,88 @@ func sealTree(args []string) error {
 
 	fmt.Println(id)
 	return nil
+}
+
+// publishServe runs the publisher.
+//
+// Certificates are not configurable as raw paths: they are derived from the
+// node's certname and ssldir, so the publisher uses the same Puppet CA
+// material as everything else on the box. Introducing a separate keypair here
+// would create a second trust root to rotate and revoke.
+func publishServe(args []string) error {
+	opts := struct {
+		staging  string
+		listen   string
+		certname string
+		ssldir   string
+		roles    []string
+	}{
+		listen: ":8150",
+		ssldir: puppetca.DefaultSSLDir,
+	}
+
+	for i := 0; i < len(args); i++ {
+		next := func() (string, error) {
+			i++
+			if i >= len(args) {
+				return "", fmt.Errorf("%s needs a value", args[i-1])
+			}
+			return args[i], nil
+		}
+		var err error
+		switch args[i] {
+		case "--staging":
+			opts.staging, err = next()
+		case "--listen":
+			opts.listen, err = next()
+		case "--certname":
+			opts.certname, err = next()
+		case "--ssldir":
+			opts.ssldir, err = next()
+		case "--allow-role":
+			var r string
+			if r, err = next(); err == nil {
+				opts.roles = append(opts.roles, r)
+			}
+		default:
+			return fmt.Errorf("unknown argument %q", args[i])
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if opts.staging == "" {
+		return fmt.Errorf("publish needs --staging <dir>")
+	}
+	if opts.certname == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return fmt.Errorf("determining certname: %w", err)
+		}
+		opts.certname = hostname
+	}
+	if len(opts.roles) == 0 {
+		opts.roles = []string{"openvox_compiler"}
+	}
+
+	paths := puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}
+	tlsConfig, err := paths.ServerTLS(opts.roles...)
+	if err != nil {
+		return err
+	}
+
+	store := publish.NewStore(opts.staging)
+	if err := store.Reseal(); err != nil {
+		return err
+	}
+
+	for env, id := range store.Environments() {
+		fmt.Fprintf(os.Stderr, "sealed %s %s\n", env, id)
+	}
+	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s)\n",
+		opts.listen, opts.certname, strings.Join(opts.roles, ", "))
+
+	srv := &publish.Server{Addr: opts.listen, Store: store, TLSConfig: tlsConfig}
+	return srv.ListenAndServeTLS()
 }

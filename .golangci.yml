@@ -29,3 +29,9 @@ linters:
       - path: _test\.go
         linters:
           - gosec
+      # testca exists only to support tests; it is never imported by the
+      # shipped binary. It mirrors Puppet's real ssldir permissions, which
+      # gosec reads as overly permissive.
+      - path: internal/testca/
+        linters:
+          - gosec
