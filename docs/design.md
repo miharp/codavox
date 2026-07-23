@@ -1,8 +1,8 @@
-# stagehand — design notes
+# codavox — design notes
 
-> A stagehand moves the set pieces into position so every performance is
-> identical. That is the job: get exactly the same code onto every compiler,
-> and let each one say precisely which version it is serving.
+> A *coda* is the passage that brings every performance to the same close.
+> That is the job: get exactly the same code onto every compiler, and let each
+> one say precisely which version it is serving.
 
 Status: **design exploration.** Nothing implemented. Written 2026-07-23.
 
@@ -96,16 +96,21 @@ argument for living there. Release cadence, language freedom, and the fact that
 publisher/agent/scripts have three different deployment targets all point the
 same way.
 
+**Language: Go.** Settled, not merely preferred — the per-compile spawn cost
+(see contract) rules out interpreted languages for the compiler-side commands,
+and a single static binary with no runtime dependency is exactly what you want
+landing on every compiler.
+
 Single Go binary, subcommands:
 
 ```text
-stagehand publish       # primary: run r10k, seal, serve version + artifacts
-stagehand agent         # compiler: poll, fetch, unpack, symlink-swap, reap
-stagehand code-id       # per-compile — must be ~1ms
-stagehand code-content  # per static_file_content request
+codavox publish       # primary: run r10k, seal, serve version + artifacts
+codavox agent         # compiler: poll, fetch, unpack, symlink-swap, reap
+codavox code-id       # per-compile — must be ~1ms
+codavox code-content  # per static_file_content request
 ```
 
-Plus a **separate Forge module** (`voxpupuli/stagehand`) to configure it, per
+Plus a **separate Forge module** (`voxpupuli/codavox`) to configure it, per
 Vox Pupuli convention.
 
 **Repo layout and packaging layout are independent decisions.** Own repo does
@@ -131,4 +136,17 @@ do not pay for it in source coupling.
   rugged for r10k considerably. **Highest-value unknown.**
 - Whether the agent should reuse r10k's Puppetfile resolution or treat the
   staged tree as fully opaque. (Leaning opaque.)
-- Is the name `stagehand` free on GitHub, the Forge, and as a Go module path?
+## Name
+
+`codavox` was checked and is unclaimed on GitHub (zero repositories), RubyGems,
+npm, and the Puppet Forge, and is free on pkg.go.dev and the Go module proxy
+for both `github.com/openvoxproject/codavox` and `github.com/voxpupuli/codavox`.
+It is also a valid Go package identifier — lowercase, no hyphens.
+
+Rejected: `stagehand` (collides with a 23.6k-star browser-agent SDK holding the
+name on RubyGems and npm), `codesync` (1300+ GitHub repos, taken on npm), and
+`voxsync` — the last because "sync" implies the file-copying model this design
+explicitly rejects, and because it borrows `modulesync`'s shape without its
+logic (`modulesync` names what it syncs; this would not).
+
+Trademark review has not been done.

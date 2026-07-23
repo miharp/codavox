@@ -4,7 +4,7 @@ Everything here was verified by reading source, not documentation.
 
 Source: `~/projects/openvox-server` @ `a2e0bb8a`
 
-This is the interface `stagehand` must satisfy. It is stable, open source, and
+This is the interface `codavox` must satisfy. It is stable, open source, and
 already enabled in shipped openvox-server packages — **no server changes are
 required.**
 
@@ -21,7 +21,7 @@ puppetlabs.services.versioned-code-service.versioned-code-service/versioned-code
 
 The service is a pluggable hook: puppetserver delegates "what is the current
 code version" and "give me file X at version Y" to two external commands. Any
-implementation that satisfies the contract below works, which is why stagehand
+implementation that satisfies the contract below works, which is why codavox
 can exist entirely outside the server.
 
 ## Configuration
@@ -30,8 +30,8 @@ can exist entirely outside the server.
 
 ```hocon
 versioned-code: {
-  code-id-command: "/opt/puppetlabs/bin/stagehand-code-id"
-  code-content-command: "/opt/puppetlabs/bin/stagehand-code-content"
+  code-id-command: "/opt/puppetlabs/bin/codavox-code-id"
+  code-content-command: "/opt/puppetlabs/bin/codavox-code-content"
 }
 ```
 
@@ -93,7 +93,7 @@ on the critical path of every compile:
 
 | implementation | approx startup | CPU per wall-clock second |
 | --- | --- | --- |
-| Go/Rust static binary | 1-2 ms | negligible |
+| Go static binary | 1-2 ms | negligible |
 | shell script (readlink) | 1-2 ms | negligible |
 | Ruby script | ~100 ms | ~3 s — unusable |
 

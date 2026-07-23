@@ -1,10 +1,9 @@
-# stagehand
+# codavox
 
 Versioned code distribution for OpenVox compilers, built on puppetserver's
 open-source `versioned-code-service` hook.
 
-> A stagehand moves the set pieces into position so every performance is
-> identical.
+> A *coda* is the passage that brings every performance to the same close.
 
 **Status: design exploration. Nothing is implemented.**
 
@@ -16,7 +15,7 @@ itself), or rsync (not atomic, not versioned). All three distribute *code*;
 none distributes *identity*, so nothing can answer "which version is this
 compiler serving?"
 
-stagehand distributes resolved code artifacts addressed by a `code_id`, so
+codavox distributes resolved code artifacts addressed by a `code_id`, so
 compilers converge on their own and agents get consistent file content
 mid-run via static catalogs.
 
