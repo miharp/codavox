@@ -124,7 +124,87 @@ codavox/
 
 ---
 
-## 3. Phase 1 — `code-id` and `code-content` (start here)
+## 3. Packaging (required for POC)
+
+The POC must install via `dnf`/`apt`. Go makes this far easier than it would
+have been in Ruby — a static binary with no runtime dependencies means the
+package is essentially binary + systemd unit + config + directories.
+
+### Tooling: goreleaser + nfpm
+
+One `.goreleaser.yaml` produces cross-compiled binaries, `.rpm`, `.deb`,
+checksums, and a GitHub Release from a single CI job. nfpm builds both package
+formats **without needing `rpmbuild` or `dpkg-dev`**, so it runs anywhere
+including macOS — no per-distro build hosts.
+
+### arm64 is a primary target, not an afterthought
+
+Local testing is on an M2 Pro: Parallels VMs are aarch64 and Docker on
+M-series defaults to arm64. **If `linux/arm64` is not a first-class build
+target, nothing installs on the dev machine.** Build `linux/amd64` and
+`linux/arm64` from day one.
+
+### The matrix collapses
+
+Because the binary is static with no dependencies, there are no per-distro
+builds — one RPM and one DEB per architecture covers everything in the test
+estate:
+
+| artifact | covers |
+|---|---|
+| `codavox-<v>.x86_64.rpm` / `.aarch64.rpm` | Rocky 9 (ovadm), CentOS Stream 9 + 10 (control-repo) |
+| `codavox_<v>_amd64.deb` / `_arm64.deb` | Ubuntu 24.04 (control-repo agent02) |
+
+If a distro-specific dependency ever appears, that is a signal something has
+gone wrong with the "static binary" premise.
+
+### Package contents
+
+```text
+/usr/bin/codavox
+/usr/lib/systemd/system/codavox-agent.service
+/usr/lib/systemd/system/codavox-publish.service     # primary only; not enabled by default
+/etc/codavox/config.yaml                            # %config(noreplace) / deb conffile
+/opt/puppetlabs/codavox/versions/                   # owned, 0755 root
+/opt/puppetlabs/codavox/state/                      # owned, 0755 root
+```
+
+**Use `/usr/bin/codavox`, not `/opt/puppetlabs/bin/`.** That directory is owned
+by the openvox-agent package; shipping into it invites file conflicts on
+upgrade. `versioned-code.conf` takes an absolute path, so there is nothing to
+gain from co-locating.
+
+**Ship one package, not two.** It is a single binary; both units ship and the
+operator (or the Forge module) enables what applies. Split into
+`codavox-agent`/`codavox-server` only if the publisher grows dependencies the
+compilers should not carry.
+
+**postinst does `systemctl daemon-reload` and nothing else** — do not auto-enable
+or auto-start. Let the Forge module own that decision, so package installation
+is never itself a config change.
+
+### Distribution: GitHub Releases first
+
+For the POC, publish artifacts to GitHub Releases and install by direct URL:
+
+```bash
+dnf install https://github.com/<org>/codavox/releases/download/v0.1.0/codavox-0.1.0.aarch64.rpm
+```
+
+This gets dependency resolution, clean upgrade, and clean uninstall — most of
+the value of "installs with dnf/apt" — for almost no work. It also matches a
+pattern the ecosystem already uses: ovadm's `install`/`upgrade` plans accept a
+`package_url` for exactly this kind of pre-release artifact install.
+
+**Real repository hosting is a separate project**, deliberately out of POC
+scope: `createrepo` plus an apt repo, GPG key generation and distribution, key
+rotation policy, and eventually a conversation about landing in
+`yum.voxpupuli.org` / `apt.voxpupuli.org`. Signing keys in particular are a
+commitment, not a build step. Do not start here.
+
+---
+
+## 4. Phase 1 — `code-id` and `code-content` (start here)
 
 The leaf of the dependency tree, independently testable, and it produces the
 headline number immediately.
@@ -162,7 +242,7 @@ Publish the number; it justifies the whole language decision.
 
 ---
 
-## 4. Phase 2 — seal and publish
+## 5. Phase 2 — seal and publish
 
 `codavox publish`:
 
@@ -185,7 +265,7 @@ exercise. Swap the implementation once the protocol is proven.
 
 ---
 
-## 5. Phase 3 — agent
+## 6. Phase 3 — agent
 
 `codavox agent` on each compiler, as a systemd timer or small daemon:
 
@@ -206,7 +286,7 @@ without it forces the polling path to actually be correct.
 
 ---
 
-## 6. Phase 4 — Forge module
+## 7. Phase 4 — Forge module
 
 `voxpupuli/codavox`, kept in a separate repo per Vox Pupuli convention.
 Manages the binary, systemd unit, config, and — critically — writes
@@ -218,7 +298,7 @@ closely on the existing profile; that profile is the reference.
 
 ---
 
-## 7. Integration tests
+## 8. Integration tests
 
 Under `test/integration/`, driven by the ovadm Docker topology. Each maps to a specific claim
 in [design.md](design.md):
@@ -243,23 +323,30 @@ Tests 2 and 4 are the ones that justify the project. Write them first.
 
 ---
 
-## 8. Sequencing
+## 9. Sequencing
 
 | phase | deliverable | gate |
 |---|---|---|
 | 1 | `code-id` / `code-content` + benchmark vs baseline | latency number published |
+| 1.5 | **goreleaser + nfpm producing rpm/deb for amd64 + arm64** | `dnf install <url>` works on a Rocky 9 container |
 | 2 | `publish` + reproducible sealing | same tree → same id, twice, two machines |
 | 3 | `agent` + `compiler02` added to ovadm compose | tests 1, 2, 3 pass |
 | 4 | Forge module | control-repo can A/B baseline vs codavox |
 | 5 | tests 4-7 | full suite green |
 | 6 | transport swap (git or OCI) | behind the interface, no protocol change |
 
+**Packaging lands at 1.5, immediately after the first working binary.** Doing it
+early means every later phase is tested through the same install path operators
+will use, rather than by copying binaries around and discovering packaging
+problems at the end. It is also cheap at that point — one binary, one unit file
+— and gets more expensive the longer it is deferred.
+
 Phase 1 is worth doing even if the project stops there — it is a drop-in
 improvement to the control-repo's existing static catalog setup.
 
 ---
 
-## 9. Decisions still open
+## 10. Decisions still open
 
 - **GitHub org** — blocks the Go module path. Decide first.
 - **Compiler CA relationship** — blocks phase 3 mTLS.
