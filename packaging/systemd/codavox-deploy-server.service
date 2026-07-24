@@ -1,0 +1,15 @@
+[Unit]
+Description=codavox deploy server (deploy API and control-repo webhook)
+Documentation=https://github.com/miharp/codavox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Flags come from /etc/codavox/config.yaml (staging, and the deploy_server
+# api_token / secret that enable the API and the webhook).
+ExecStart=/usr/bin/codavox deploy-server
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

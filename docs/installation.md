@@ -77,6 +77,9 @@ resolution, upgrade, and clean uninstall in the meantime.
 /usr/bin/codavox-code-id       -> codavox
 /usr/bin/codavox-code-content  -> codavox
 /opt/puppetlabs/codavox/versions/
+/usr/lib/systemd/system/codavox-agent.service
+/usr/lib/systemd/system/codavox-publish.service
+/usr/lib/systemd/system/codavox-deploy-server.service
 ```
 
 The two symlinks exist because OpenVox Server passes only positional arguments
@@ -88,10 +91,30 @@ belongs to the openvox-agent package, and shipping into it risks file conflicts
 on upgrade. `versioned-code.conf` takes an absolute path, so nothing is gained
 by co-locating.
 
-**Installing the package changes no configuration.** It does not enable a
-service or write to `puppetserver`'s config. Wiring codavox into OpenVox Server
-is a separate, deliberate step — see
-[Wiring into puppetserver](commands.md#wiring-into-puppetserver).
+**Installing the package changes no configuration.** The postinstall runs only
+`systemctl daemon-reload`; no unit is enabled or started, and nothing is written
+to `puppetserver`'s config. Which node runs which daemon is your choice.
+
+## Running the daemons
+
+The three units are driven by [`/etc/codavox/config.yaml`](configuration.md), so
+you enable the ones a node needs and the config supplies their settings:
+
+```console
+# on the primary
+systemctl enable --now codavox-publish        # needs config: staging
+systemctl enable --now codavox-deploy-server   # needs config: api_token and/or secret
+
+# on each compiler (after wiring OpenVox Server — see below)
+systemctl enable --now codavox-agent           # needs config: agent.publisher
+```
+
+`systemctl reload codavox-publish` sends the publisher a `SIGHUP` to reseal after
+a deploy, which is what r10k's `postrun` hook can call.
+
+Wiring codavox into OpenVox Server on a compiler is a separate, deliberate step —
+see [Wiring into puppetserver](commands.md#wiring-into-puppetserver) and the safe
+order above.
 
 ## Verify
 

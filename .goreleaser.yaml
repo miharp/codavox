@@ -73,6 +73,22 @@ nfpms:
         file_info:
           mode: 0755
 
+      # systemd units for the three daemons. They are config-file driven
+      # (/etc/codavox/config.yaml), so a node runs `codavox agent`, `publish`,
+      # or `deploy-server` by enabling the matching unit — one binary, one
+      # config, role chosen by which units are enabled.
+      - src: packaging/systemd/codavox-agent.service
+        dst: /usr/lib/systemd/system/codavox-agent.service
+      - src: packaging/systemd/codavox-publish.service
+        dst: /usr/lib/systemd/system/codavox-publish.service
+      - src: packaging/systemd/codavox-deploy-server.service
+        dst: /usr/lib/systemd/system/codavox-deploy-server.service
+
+    # daemon-reload on install so the units are visible; nothing is enabled or
+    # started, so installing the package changes no configuration.
+    scripts:
+      postinstall: packaging/scripts/postinstall.sh
+
     rpm:
       group: System Environment/Base
     deb:
