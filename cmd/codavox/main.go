@@ -27,11 +27,11 @@ import (
 	"github.com/miharp/codavox/internal/agent"
 	"github.com/miharp/codavox/internal/content"
 	"github.com/miharp/codavox/internal/deploy"
+	"github.com/miharp/codavox/internal/deployserver"
 	"github.com/miharp/codavox/internal/layout"
 	"github.com/miharp/codavox/internal/publish"
 	"github.com/miharp/codavox/internal/puppetca"
 	"github.com/miharp/codavox/internal/seal"
-	"github.com/miharp/codavox/internal/webhook"
 )
 
 const usage = `codavox — versioned code distribution for OpenVox compilers
@@ -64,12 +64,14 @@ Usage:
         Run r10k to stage code, then trigger the publisher to reseal. Run this
         on the primary. With --wait, block until the new code_id is served.
 
-  codavox webhook --secret <file> [--listen <addr>] [--no-tls]
-                  --staging <dir> [--state <dir>]
-                  [--r10k <path>] [--r10k-config <file>]
-                  [--certname <name>] [--ssldir <dir>]
-        Deploy on control-repo push. Runs on the primary, authenticating
-        GitHub, GitLab, or generic webhooks against a shared secret.
+  codavox deploy-server [--api-token <file>] [--secret <file>]
+                        [--listen <addr>] [--no-tls] [--history <n>]
+                        --staging <dir> [--state <dir>]
+                        [--r10k <path>] [--r10k-config <file>]
+                        [--certname <name>] [--ssldir <dir>]
+        Serve the deploy API and/or webhook on the primary. --api-token enables
+        POST /v1/deploys and deploy status; --secret enables the push webhook.
+        (codavox webhook is an alias serving only the webhook.)
 
   codavox provenance <environment> <code-id> [--state <dir>] [--json]
         Print the control-repo commit that produced a code_id, read from the
@@ -135,8 +137,10 @@ func run(cmd string, args []string) error {
 		return agentRun(args)
 	case "deploy":
 		return deployRun(args)
-	case "webhook":
-		return webhookServe(args)
+	case "deploy-server", "webhook":
+		// webhook is a compatibility alias: deploy-server with only --secret set
+		// serves the webhook route and nothing else.
+		return deployServer(args)
 	case "provenance":
 		return provenanceQuery(args)
 	case "version":
@@ -603,26 +607,30 @@ func commitTag(commit string) string {
 	return "(commit " + commit + ")"
 }
 
-// webhookServe runs the webhook receiver, deploying on control-repo push.
+// deployServer serves the deploy API and/or the webhook.
 //
-// It is a long-running daemon on the primary: unlike the publisher's artifact
-// API, its callers are GitHub or GitLab, which cannot present a Puppet
-// certificate, so it authenticates a shared secret rather than mutual TLS.
-func webhookServe(args []string) error {
+// Unlike the publisher's artifact API, its callers — CI over the API, GitHub or
+// GitLab over the webhook — cannot present a Puppet certificate, so it
+// authenticates a bearer token or a shared secret rather than mutual TLS. Both
+// front doors feed one deploy queue and one history.
+func deployServer(args []string) error {
 	opts := struct {
-		secretFile string
-		listen     string
-		noTLS      bool
-		staging    string
-		state      string
-		r10k       string
-		r10kConfig string
-		certname   string
-		ssldir     string
+		apiTokenFile string
+		secretFile   string
+		listen       string
+		noTLS        bool
+		staging      string
+		state        string
+		r10k         string
+		r10kConfig   string
+		certname     string
+		ssldir       string
+		history      int
 	}{
-		listen: ":8170",
-		ssldir: puppetca.DefaultSSLDir,
-		state:  defaultStateDir(),
+		listen:  ":8170",
+		ssldir:  puppetca.DefaultSSLDir,
+		state:   defaultStateDir(),
+		history: 100,
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -634,7 +642,10 @@ func webhookServe(args []string) error {
 			return args[i], nil
 		}
 		var err error
+		var v string
 		switch args[i] {
+		case "--api-token":
+			opts.apiTokenFile, err = next()
 		case "--secret":
 			opts.secretFile, err = next()
 		case "--listen":
@@ -653,6 +664,10 @@ func webhookServe(args []string) error {
 			opts.certname, err = next()
 		case "--ssldir":
 			opts.ssldir, err = next()
+		case "--history":
+			if v, err = next(); err == nil {
+				opts.history, err = strconv.Atoi(v)
+			}
 		default:
 			return fmt.Errorf("unknown argument %q", args[i])
 		}
@@ -661,42 +676,43 @@ func webhookServe(args []string) error {
 		}
 	}
 
-	if opts.secretFile == "" {
-		return fmt.Errorf("webhook needs --secret <file>")
-	}
 	if opts.staging == "" {
-		return fmt.Errorf("webhook needs --staging <dir>")
+		return fmt.Errorf("deploy-server needs --staging <dir>")
 	}
-
-	secret, err := os.ReadFile(opts.secretFile)
+	apiToken, err := readSecretFile(opts.apiTokenFile)
 	if err != nil {
-		return fmt.Errorf("reading secret: %w", err)
+		return err
 	}
-	secret = bytes.TrimSpace(secret)
-	if len(secret) == 0 {
-		return fmt.Errorf("secret file %s is empty", opts.secretFile)
+	secret, err := readSecretFile(opts.secretFile)
+	if err != nil {
+		return err
+	}
+	if len(apiToken) == 0 && len(secret) == 0 {
+		return fmt.Errorf("deploy-server needs --api-token, --secret, or both")
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	adapter := &deployAdapter{
-		cfg: deploy.Config{
+	srv := deployserver.New(deployserver.Config{
+		Deployer: deployserver.Runner{Config: deploy.Config{
 			R10kPath:   opts.r10k,
 			R10kConfig: opts.r10kConfig,
 			StagingDir: opts.staging,
 			StateDir:   opts.state,
 			Modules:    true,
-		},
-		logger: logger,
-	}
-	h := webhook.New(secret, adapter, logger)
+		}},
+		APIToken:   apiToken,
+		Secret:     secret,
+		MaxHistory: opts.history,
+		Logger:     logger,
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go h.Start(ctx)
+	go srv.Start(ctx)
 
-	srv := &http.Server{
+	httpSrv := &http.Server{
 		Addr:              opts.listen,
-		Handler:           h,
+		Handler:           srv,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -704,12 +720,13 @@ func webhookServe(args []string) error {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutCtx)
+		_ = httpSrv.Shutdown(shutCtx)
 	}()
 
+	roles := deployServerRoles(apiToken, secret)
 	if opts.noTLS {
-		fmt.Fprintf(os.Stderr, "webhook listening on %s (no TLS)\n", opts.listen)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(os.Stderr, "deploy-server listening on %s (%s, no TLS)\n", opts.listen, roles)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 		return nil
@@ -726,31 +743,41 @@ func webhookServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	srv.TLSConfig = tlsConfig
-	fmt.Fprintf(os.Stderr, "webhook listening on %s as %s\n", opts.listen, opts.certname)
-	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	httpSrv.TLSConfig = tlsConfig
+	fmt.Fprintf(os.Stderr, "deploy-server listening on %s as %s (%s)\n", opts.listen, opts.certname, roles)
+	if err := httpSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
 }
 
-// deployAdapter adapts internal/deploy to the webhook.Deployer seam, so the
-// webhook receiver deploys through the same path as the deploy command.
-type deployAdapter struct {
-	cfg    deploy.Config
-	logger *slog.Logger
+// readSecretFile reads and trims a credential file. An empty path yields no
+// credential (that route stays disabled); a named file that is empty is an
+// error, since it was clearly meant to enable something.
+func readSecretFile(path string) ([]byte, error) {
+	if path == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path) // #nosec G304 -- operator-supplied credential path
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 {
+		return nil, fmt.Errorf("credential file %s is empty", path)
+	}
+	return b, nil
 }
 
-func (a *deployAdapter) Deploy(env string) error {
-	results, err := deploy.Run(a.cfg, []string{env}, false, false)
-	for _, r := range results {
-		if r.Err != "" {
-			a.logger.Error("deploy failed", "environment", r.Env, "error", r.Err)
-		} else {
-			a.logger.Info("deployed", "environment", r.Env, "code_id", r.CodeID)
-		}
+func deployServerRoles(apiToken, secret []byte) string {
+	switch {
+	case len(apiToken) > 0 && len(secret) > 0:
+		return "api + webhook"
+	case len(apiToken) > 0:
+		return "api"
+	default:
+		return "webhook"
 	}
-	return err
 }
 
 // provenanceFile is the publisher's provenance log, relative to the state dir.
