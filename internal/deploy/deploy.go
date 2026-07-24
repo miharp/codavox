@@ -34,6 +34,11 @@ import (
 // always waits for synchronously.
 const DefaultWaitTimeout = 60 * time.Second
 
+// DefaultLockTimeout bounds how long Run waits for a concurrent deploy to
+// release the staging lock. It is generous because r10k, which a competing
+// deploy runs while holding the lock, can itself take minutes.
+const DefaultLockTimeout = 10 * time.Minute
+
 // fallbackR10k is the OpenVox package path, tried when r10k is not on PATH.
 const fallbackR10k = "/opt/puppetlabs/puppet/bin/r10k"
 
@@ -54,6 +59,9 @@ type Config struct {
 	Modules bool
 	// WaitTimeout bounds the Wait poll; zero uses DefaultWaitTimeout.
 	WaitTimeout time.Duration
+	// LockTimeout bounds how long Run waits to acquire the staging lock behind
+	// another deploy; zero uses DefaultLockTimeout.
+	LockTimeout time.Duration
 	// Stderr receives r10k's output; nil means os.Stderr.
 	Stderr io.Writer
 }
@@ -79,6 +87,9 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	if cfg.StagingDir == "" {
 		return nil, errors.New("deploy needs a staging directory")
 	}
+	if cfg.StateDir == "" {
+		return nil, errors.New("deploy needs a state directory")
+	}
 	if all && len(envs) > 0 {
 		return nil, errors.New("give environments or --all, not both")
 	}
@@ -95,6 +106,21 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Serialize against every other deploy on this host. r10k mutates the
+	// staging directory in place, so two overlapping deploys — from the CLI, the
+	// webhook, or the deploy API — would corrupt each other's trees. The lock is
+	// held across r10k and sealing, and through --wait, so a second deploy does
+	// not begin r10k until this one's reseal has been observed.
+	lockTimeout := cfg.LockTimeout
+	if lockTimeout <= 0 {
+		lockTimeout = DefaultLockTimeout
+	}
+	release, err := lockStaging(cfg.StateDir, lockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	if err := runR10k(cfg, r10k, envs); err != nil {
 		return nil, err
@@ -241,6 +267,43 @@ func deployCommit(envDir string) string {
 		return ""
 	}
 	return d.Signature
+}
+
+// lockStaging takes an exclusive flock on the deploy lock under stateDir,
+// returning a release function. It polls rather than blocking in the syscall so
+// it can give up after timeout instead of hanging on a wedged deploy.
+//
+// flock is advisory and process-associated, released if the holder exits, so a
+// crashed deploy does not leave the lock stuck.
+func lockStaging(stateDir string, timeout time.Duration) (func(), error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating state directory: %w", err)
+	}
+	path := filepath.Join(stateDir, "deploy.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- state dir is operator-supplied
+	if err != nil {
+		return nil, fmt.Errorf("opening deploy lock: %w", err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() {
+				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+				_ = f.Close()
+			}, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			_ = f.Close()
+			return nil, fmt.Errorf("locking staging: %w", err)
+		}
+		if time.Now().After(deadline) {
+			_ = f.Close()
+			return nil, errors.New("timed out waiting for a concurrent deploy to finish")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // SignalPublisher sends SIGHUP to the running publisher so it reseals.
