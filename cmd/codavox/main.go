@@ -9,10 +9,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,6 +31,7 @@ import (
 	"github.com/miharp/codavox/internal/publish"
 	"github.com/miharp/codavox/internal/puppetca"
 	"github.com/miharp/codavox/internal/seal"
+	"github.com/miharp/codavox/internal/webhook"
 )
 
 const usage = `codavox — versioned code distribution for OpenVox compilers
@@ -60,6 +63,13 @@ Usage:
                  [--staging <dir>] [--state <dir>] [--json]
         Run r10k to stage code, then trigger the publisher to reseal. Run this
         on the primary. With --wait, block until the new code_id is served.
+
+  codavox webhook --secret <file> [--listen <addr>] [--no-tls]
+                  --staging <dir> [--state <dir>]
+                  [--r10k <path>] [--r10k-config <file>]
+                  [--certname <name>] [--ssldir <dir>]
+        Deploy on control-repo push. Runs on the primary, authenticating
+        GitHub, GitLab, or generic webhooks against a shared secret.
 
   codavox provenance <environment> <code-id> [--state <dir>] [--json]
         Print the control-repo commit that produced a code_id, read from the
@@ -125,6 +135,8 @@ func run(cmd string, args []string) error {
 		return agentRun(args)
 	case "deploy":
 		return deployRun(args)
+	case "webhook":
+		return webhookServe(args)
 	case "provenance":
 		return provenanceQuery(args)
 	case "version":
@@ -589,6 +601,156 @@ func commitTag(commit string) string {
 		commit = commit[:7]
 	}
 	return "(commit " + commit + ")"
+}
+
+// webhookServe runs the webhook receiver, deploying on control-repo push.
+//
+// It is a long-running daemon on the primary: unlike the publisher's artifact
+// API, its callers are GitHub or GitLab, which cannot present a Puppet
+// certificate, so it authenticates a shared secret rather than mutual TLS.
+func webhookServe(args []string) error {
+	opts := struct {
+		secretFile string
+		listen     string
+		noTLS      bool
+		staging    string
+		state      string
+		r10k       string
+		r10kConfig string
+		certname   string
+		ssldir     string
+	}{
+		listen: ":8170",
+		ssldir: puppetca.DefaultSSLDir,
+		state:  defaultStateDir(),
+	}
+
+	for i := 0; i < len(args); i++ {
+		next := func() (string, error) {
+			i++
+			if i >= len(args) {
+				return "", fmt.Errorf("%s needs a value", args[i-1])
+			}
+			return args[i], nil
+		}
+		var err error
+		switch args[i] {
+		case "--secret":
+			opts.secretFile, err = next()
+		case "--listen":
+			opts.listen, err = next()
+		case "--no-tls":
+			opts.noTLS = true
+		case "--staging":
+			opts.staging, err = next()
+		case "--state":
+			opts.state, err = next()
+		case "--r10k":
+			opts.r10k, err = next()
+		case "--r10k-config":
+			opts.r10kConfig, err = next()
+		case "--certname":
+			opts.certname, err = next()
+		case "--ssldir":
+			opts.ssldir, err = next()
+		default:
+			return fmt.Errorf("unknown argument %q", args[i])
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if opts.secretFile == "" {
+		return fmt.Errorf("webhook needs --secret <file>")
+	}
+	if opts.staging == "" {
+		return fmt.Errorf("webhook needs --staging <dir>")
+	}
+
+	secret, err := os.ReadFile(opts.secretFile)
+	if err != nil {
+		return fmt.Errorf("reading secret: %w", err)
+	}
+	secret = bytes.TrimSpace(secret)
+	if len(secret) == 0 {
+		return fmt.Errorf("secret file %s is empty", opts.secretFile)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	adapter := &deployAdapter{
+		cfg: deploy.Config{
+			R10kPath:   opts.r10k,
+			R10kConfig: opts.r10kConfig,
+			StagingDir: opts.staging,
+			StateDir:   opts.state,
+			Modules:    true,
+		},
+		logger: logger,
+	}
+	h := webhook.New(secret, adapter, logger)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go h.Start(ctx)
+
+	srv := &http.Server{
+		Addr:              opts.listen,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+
+	if opts.noTLS {
+		fmt.Fprintf(os.Stderr, "webhook listening on %s (no TLS)\n", opts.listen)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
+
+	if opts.certname == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return fmt.Errorf("determining certname: %w", err)
+		}
+		opts.certname = hostname
+	}
+	tlsConfig, err := (puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}).ServerCertTLS()
+	if err != nil {
+		return err
+	}
+	srv.TLSConfig = tlsConfig
+	fmt.Fprintf(os.Stderr, "webhook listening on %s as %s\n", opts.listen, opts.certname)
+	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// deployAdapter adapts internal/deploy to the webhook.Deployer seam, so the
+// webhook receiver deploys through the same path as the deploy command.
+type deployAdapter struct {
+	cfg    deploy.Config
+	logger *slog.Logger
+}
+
+func (a *deployAdapter) Deploy(env string) error {
+	results, err := deploy.Run(a.cfg, []string{env}, false, false)
+	for _, r := range results {
+		if r.Err != "" {
+			a.logger.Error("deploy failed", "environment", r.Env, "error", r.Err)
+		} else {
+			a.logger.Info("deployed", "environment", r.Env, "code_id", r.CodeID)
+		}
+	}
+	return err
 }
 
 // provenanceFile is the publisher's provenance log, relative to the state dir.
