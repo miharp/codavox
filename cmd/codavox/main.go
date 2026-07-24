@@ -24,6 +24,7 @@ import (
 
 	"github.com/miharp/codavox/internal/agent"
 	"github.com/miharp/codavox/internal/content"
+	"github.com/miharp/codavox/internal/deploy"
 	"github.com/miharp/codavox/internal/layout"
 	"github.com/miharp/codavox/internal/publish"
 	"github.com/miharp/codavox/internal/puppetca"
@@ -53,6 +54,12 @@ Usage:
                 [--certname <name>] [--ssldir <dir>] [--environmentpath <dir>]
                 [--keep <n>] [--min-age <dur>]
         Poll a publisher and converge this compiler onto the code it serves.
+
+  codavox deploy <environment>... | --all [--wait] [--no-modules]
+                 [--r10k <path>] [--r10k-config <file>]
+                 [--staging <dir>] [--state <dir>] [--json]
+        Run r10k to stage code, then trigger the publisher to reseal. Run this
+        on the primary. With --wait, block until the new code_id is served.
 
   codavox provenance <environment> <code-id> [--state <dir>] [--json]
         Print the control-repo commit that produced a code_id, read from the
@@ -116,6 +123,8 @@ func run(cmd string, args []string) error {
 		return publishServe(args)
 	case "agent":
 		return agentRun(args)
+	case "deploy":
+		return deployRun(args)
 	case "provenance":
 		return provenanceQuery(args)
 	case "version":
@@ -303,7 +312,7 @@ func publishServe(args []string) error {
 		return err
 	}
 
-	store := publish.NewStore(opts.staging, filepath.Join(opts.state, "artifacts"))
+	store := publish.NewStore(opts.staging, publish.ArtifactsDir(opts.state))
 
 	provLog, err := publish.OpenLog(filepath.Join(opts.state, provenanceFile))
 	if err != nil {
@@ -320,6 +329,16 @@ func publishServe(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s)\n",
 		opts.listen, opts.certname, strings.Join(opts.roles, ", "))
+
+	// Record the pid so a deploy can signal this publisher to reseal.
+	pidPath := publish.PidFilePath(opts.state)
+	if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err != nil {
+		return fmt.Errorf("creating state directory: %w", err)
+	}
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil { // #nosec G306
+		return fmt.Errorf("writing pidfile: %w", err)
+	}
+	defer func() { _ = os.Remove(pidPath) }()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -459,6 +478,117 @@ func agentRun(args []string) error {
 		return err
 	}
 	return nil
+}
+
+// deployRun runs r10k to stage code and triggers the publisher to reseal.
+//
+// This is the operator-facing deploy verb, familiar from Code Manager's
+// puppet-code deploy. The orchestration lives in internal/deploy so a webhook
+// receiver or deploy API can later reuse it rather than reimplementing r10k
+// invocation and the reseal trigger.
+func deployRun(args []string) error {
+	opts := struct {
+		envs       []string
+		all        bool
+		wait       bool
+		noModules  bool
+		r10k       string
+		r10kConfig string
+		staging    string
+		state      string
+		asJSON     bool
+	}{
+		state: defaultStateDir(),
+	}
+
+	for i := 0; i < len(args); i++ {
+		next := func() (string, error) {
+			i++
+			if i >= len(args) {
+				return "", fmt.Errorf("%s needs a value", args[i-1])
+			}
+			return args[i], nil
+		}
+		var err error
+		switch a := args[i]; a {
+		case "--all":
+			opts.all = true
+		case "--wait":
+			opts.wait = true
+		case "--no-modules":
+			opts.noModules = true
+		case "--json":
+			opts.asJSON = true
+		case "--r10k":
+			opts.r10k, err = next()
+		case "--r10k-config":
+			opts.r10kConfig, err = next()
+		case "--staging":
+			opts.staging, err = next()
+		case "--state":
+			opts.state, err = next()
+		default:
+			if strings.HasPrefix(a, "-") {
+				return fmt.Errorf("unknown flag %q", a)
+			}
+			opts.envs = append(opts.envs, a)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if opts.staging == "" {
+		return fmt.Errorf("deploy needs --staging <dir> (r10k's basedir, the same the publisher serves)")
+	}
+
+	results, runErr := deploy.Run(deploy.Config{
+		R10kPath:   opts.r10k,
+		R10kConfig: opts.r10kConfig,
+		StagingDir: opts.staging,
+		StateDir:   opts.state,
+		Modules:    !opts.noModules,
+	}, opts.envs, opts.all, opts.wait)
+
+	if err := printDeployResults(results, opts.wait, opts.asJSON); err != nil {
+		return err
+	}
+	return runErr
+}
+
+func printDeployResults(results []deploy.Result, waited, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if results == nil {
+			results = []deploy.Result{}
+		}
+		return enc.Encode(results)
+	}
+
+	for _, r := range results {
+		switch {
+		case r.Err != "":
+			fmt.Printf("%s\tfailed\t%s\n", r.Env, r.Err)
+		case waited && r.Serving:
+			fmt.Printf("%s\tdeployed\t%s\t%s\tserving\n", r.Env, r.CodeID, commitTag(r.Commit))
+		case waited:
+			fmt.Printf("%s\tdeployed\t%s\t%s\tnot serving\n", r.Env, r.CodeID, commitTag(r.Commit))
+		default:
+			fmt.Printf("%s\tdeployed\t%s\t%s\n", r.Env, r.CodeID, commitTag(r.Commit))
+		}
+	}
+	return nil
+}
+
+func commitTag(commit string) string {
+	if commit == "" {
+		return "(no commit)"
+	}
+	if len(commit) > 7 {
+		commit = commit[:7]
+	}
+	return "(commit " + commit + ")"
 }
 
 // provenanceFile is the publisher's provenance log, relative to the state dir.

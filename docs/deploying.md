@@ -1,0 +1,94 @@
+# Deploying
+
+`codavox deploy` runs r10k to stage code, then triggers the publisher to reseal
+— one command that takes a change from the control repo to serving on the
+primary. It is the familiar `puppet-code deploy` verb, for OpenVox Server.
+
+```console
+$ codavox deploy production --staging /etc/puppetlabs/code-staging
+production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)
+```
+
+Run it on the primary, next to the publisher.
+
+## What it does
+
+1. Runs r10k: `r10k deploy environment <environment>… --puppetfile`, which
+   resolves the control-repo branches and their Puppetfile modules into the
+   staging directory. r10k is synchronous, so `deploy` always waits for it.
+2. Seals each staged tree to report its `code_id` and reads the control-repo
+   commit r10k resolved.
+3. Signals the running publisher with `SIGHUP` so it reseals and begins serving
+   the new versions.
+
+codavox does not re-resolve code per compiler — that is its load-bearing
+invariant. Running r10k here does not weaken it: r10k runs once, centrally,
+producing one resolved tree that every compiler converges onto, exactly as PE's
+Code Manager runs r10k once and distributes the result.
+
+## Options
+
+| flag | default | purpose |
+|---|---|---|
+| *(positional)* | | Environments to deploy; omit with `--all` |
+| `--all` | | Deploy every environment r10k manages |
+| `--wait` | | Block until the publisher serves each new `code_id` |
+| `--no-modules` | | Skip Puppetfile module resolution (`r10k` without `--puppetfile`) |
+| `--r10k` | `r10k` on `PATH`, then `/opt/puppetlabs/puppet/bin/r10k` | r10k binary |
+| `--r10k-config` | r10k's default | r10k.yaml passed with `--config` |
+| `--staging` | *required* | r10k's basedir, the same directory the publisher serves |
+| `--state` | `<root>/state` | Publisher state directory (pidfile and artifacts) |
+| `--json` | | Emit results as a JSON array |
+
+`--staging` and `--state` must match the publisher's own flags. r10k's basedir,
+`publish --staging`, and `deploy --staging` are the same directory.
+
+## `--wait`
+
+Without `--wait`, `deploy` runs r10k, sends the signal, and returns — the reseal
+happens asynchronously in the publisher.
+
+With `--wait`, it blocks until the publisher has materialized the artifact for
+each new `code_id`, then reports `serving`:
+
+```console
+$ codavox deploy production --wait --staging /etc/puppetlabs/code-staging
+production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
+```
+
+This is primary-side completion: the new version is sealed and servable. It does
+not wait for every compiler to converge — compilers poll and catch up on their
+own, and a stronger fleet-wide wait is a later feature.
+
+## Triggering the reseal
+
+`deploy` signals the publisher through the pidfile the publisher writes to
+`<state>/publish.pid`. It verifies the process is alive before signaling, so a
+stale pidfile from a crashed publisher is reported rather than acted on.
+
+If no publisher is running, `deploy` still stages the code and reports each
+`code_id`, but warns that nothing is serving it yet; `--wait` in that case is an
+error, because nothing will materialize the new version to wait for.
+
+The same signal an operator or r10k `postrun` hook sends (see
+[publishing.md](publishing.md#resealing)) is what `deploy` sends for you, so a
+codavox deploy and a plain r10k-plus-`postrun` deploy converge to the same
+state.
+
+## Wiring it up
+
+`deploy` is the deploy path other front doors will reuse. A webhook receiver and
+a deploy API — so a control-repo push or a CI job can deploy the way
+`puppet-code` does — call the same orchestration rather than reimplementing it.
+Those are tracked in the [implementation plan](implementation-plan.md).
+
+## Exit codes
+
+| code | meaning |
+|---|---|
+| `0` | every requested environment deployed |
+| `1` | r10k failed, an environment could not be sealed, or a `--wait` timed out |
+| `2` | usage error |
+
+Per-environment failures do not abort the others; the exit code reflects any
+failure, and `--json` reports each environment's status individually.

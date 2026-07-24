@@ -13,8 +13,9 @@ process.
 - [Environment variables](#environment-variables)
 
 The compiler-side commands (`code-id`, `code-content`) and the operator command
-`provenance` are documented here. The daemons `publish` and `agent` have their
-own pages: [publishing.md](publishing.md) and [agent.md](agent.md).
+`provenance` are documented here. The daemons `publish` and `agent`, and the
+`deploy` command, have their own pages: [publishing.md](publishing.md),
+[agent.md](agent.md), and [deploying.md](deploying.md).
 
 ---
 
