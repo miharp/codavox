@@ -54,15 +54,17 @@ two settings, and the compiler is back to stock.
 Download the package for your platform from the
 [releases page](https://github.com/miharp/codavox/releases), then install it by
 URL. Both package managers resolve dependencies and support clean removal when
-installing from a file.
+installing from a file. Set `VERSION` to the latest release:
 
 ```console
-dnf install https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.rpm
+VERSION=0.2.1
+dnf install "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.rpm"
 ```
 
 ```console
-curl -fsSLO https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.deb
-apt-get install -y ./codavox_0.2.0_linux_arm64.deb
+VERSION=0.2.1
+curl -fsSLO "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.deb"
+apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 ```
 
 There is no package repository yet. Hosting one means `createrepo`, an apt
