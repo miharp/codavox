@@ -96,6 +96,7 @@ never a silent fall back to whatever is current.
 | [sealing.md](docs/sealing.md) | How a code_id is derived, what is excluded, and why |
 | [commands.md](docs/commands.md) | Command reference, exit codes, puppetserver wiring, on-disk layout |
 | [design.md](docs/design.md) | Architecture, transport options, repo layout, known hard parts |
+| [performance.md](docs/performance.md) | Per-deploy benchmarks, the acceptance timing harness, and how to read them |
 | [implementation-plan.md](docs/implementation-plan.md) | Phased build order, test topology, integration tests |
 | [versioned-code-contract.md](docs/versioned-code-contract.md) | The verified puppetserver interface and its validation rules |
 

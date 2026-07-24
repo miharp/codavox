@@ -35,3 +35,9 @@ linters:
       - path: internal/testca/
         linters:
           - gosec
+      # treegen exists only to build benchmark and acceptance fixtures; it is
+      # never imported by the shipped binary. It writes 0755 trees to mirror a
+      # real module tree, which gosec reads as overly permissive.
+      - path: internal/treegen/
+        linters:
+          - gosec

@@ -92,6 +92,25 @@ jobs:
       - name: Report coverage
         run: go tool cover -func=coverage.out | tail -1
 
+  bench:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Run for visibility, not as a gate: shared runners are too noisy for a
+      # hard threshold. The numbers land in the log, and running them keeps the
+      # benchmarks and the acceptance harness from silently failing to compile.
+      - name: Per-deploy operation benchmarks
+        run: go test -run '^$' -bench . -benchmem ./internal/seal/ ./internal/layout/
+
+      - name: Deploy phase timings
+        run: CODAVOX_ACCEPTANCE=1 go test -run TestDeployPhaseTimings -v ./test/acceptance/
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
