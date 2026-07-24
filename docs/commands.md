@@ -5,14 +5,16 @@ process.
 
 - [`codavox code-id`](#codavox-code-id)
 - [`codavox code-content`](#codavox-code-content)
+- [`codavox provenance`](#codavox-provenance)
 - [`codavox version`](#codavox-version)
 - [Exit codes](#exit-codes)
 - [Wiring into puppetserver](#wiring-into-puppetserver)
 - [On-disk layout](#on-disk-layout)
 - [Environment variables](#environment-variables)
 
-Commands not yet implemented (`publish`, `agent`) are tracked in the
-[implementation plan](implementation-plan.md).
+The compiler-side commands (`code-id`, `code-content`) and the operator command
+`provenance` are documented here. The daemons `publish` and `agent` have their
+own pages: [publishing.md](publishing.md) and [agent.md](agent.md).
 
 ---
 
@@ -96,6 +98,38 @@ would become an arbitrary file read on every compiler.
 $ codavox code-content production a3f1c9e4b2d8 ../../state/production.codeid
 codavox: opening "../../state/production.codeid" in a3f1c9e4b2d8: openat ...: path escapes from parent
 ```
+
+---
+
+## `codavox provenance`
+
+```text
+codavox provenance <environment> <code-id> [--state <dir>] [--json]
+```
+
+Prints the control-repo commit that produced a `code_id`, read from the
+publisher's local provenance log. **Run it on the publisher** — it reads
+`<state>/provenance.jsonl` directly and does no network I/O.
+
+```console
+$ codavox provenance production 3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb
+a3f1c9e4b2d8    deployed 2026-07-24 12:00:00 -0400    sealed 2026-07-24T16:00:00Z
+```
+
+The usual troubleshooting path: read a puzzling compiler's version with
+`codavox code-id`, then ask the publisher which commit that content came from.
+
+Because a commit that leaves resolved content unchanged seals to the same
+`code_id`, one id can list several commits, printed most recently sealed first.
+
+`--json` emits the records as an array for scripting. `--state` overrides the
+state directory (default `<root>/state`, honoring `CODAVOX_ROOT`).
+
+A `code_id` with no recorded provenance is not an error: the command prints
+`no provenance recorded` to stderr and exits `0`, because provenance is
+best-effort and its absence must never be dressed up as a different version's
+history. See [publishing.md](publishing.md#provenance) for how records are
+captured.
 
 ---
 

@@ -21,6 +21,7 @@ listening on :8150 as puppet.example.com (roles: openvox_compiler)
 | `--certname` | system hostname | Node's Puppet certname |
 | `--ssldir` | `/etc/puppetlabs/puppet/ssl` | Puppet SSL directory |
 | `--allow-role` | `openvox_compiler` | `pp_role` permitted to fetch code; repeatable |
+| `--state` | `<root>/state` | Directory for the publisher's provenance log |
 
 **codavox stages nothing.** It reads a directory r10k already populated.
 Not owning the deploy keeps the trust boundary small and lets existing r10k
@@ -113,6 +114,41 @@ the operator's job for now; a watch mode is planned.
 A directory whose name OpenVox Server would reject is skipped rather than
 treated as fatal — one badly named directory in the staging area should not
 stop every other environment from being published.
+
+## Provenance
+
+A `code_id` is a content hash, so it answers "is this compiler serving the same
+code as that one?" but not "which control-repo commit produced it?" — the
+artifact deliberately excludes `.git` and `.r10k-deploy.json`, so a compiler
+carries no way back to a commit.
+
+The publisher closes that gap. When it seals an environment it reads r10k's
+`.r10k-deploy.json` from the staging tree — which is still on disk, only
+*excluded from sealing* — and appends a record to a local log:
+
+```text
+<state>/provenance.jsonl
+```
+
+Each line maps a `code_id` to the control-repo commit (`signature`), r10k's
+deploy timestamp, and when the publisher sealed it. Query it with
+[`codavox provenance`](commands.md#codavox-provenance).
+
+Three properties are deliberate:
+
+- **Publisher-only.** The log never enters an artifact and never reaches a
+  compiler, so it cannot influence a `code_id` or the bytes a compiler serves.
+  Reading `.r10k-deploy.json` here has no effect on sealing, which still excludes
+  it.
+- **One `code_id`, many commits.** A commit that does not change resolved content
+  seals to the same `code_id`, so an id can trace back to several commits. That
+  is recorded history, not a conflict.
+- **Best-effort, never load-bearing.** A missing or malformed `.r10k-deploy.json`
+  records nothing and never fails a deploy. This is not a violation of the
+  no-fallbacks rule: that rule forbids serving *wrong content* while reporting
+  success. Provenance is diagnostic metadata, and its honest absence — reported
+  as "no provenance recorded" — is the correct answer, never a stand-in from a
+  different version.
 
 ## Testing it
 

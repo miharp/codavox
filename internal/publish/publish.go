@@ -23,12 +23,19 @@ type Store struct {
 
 	mu     sync.RWMutex
 	sealed map[string]string // environment -> code_id
+
+	// prov, when set, records where each sealed tree came from. It is optional
+	// because it is diagnostic: a Store with no log still seals and serves.
+	prov *Log
 }
 
 // NewStore returns a Store reading environments from stagingDir.
 func NewStore(stagingDir string) *Store {
 	return &Store{StagingDir: stagingDir, sealed: map[string]string{}}
 }
+
+// EnableProvenance makes Reseal capture control-repo provenance into log.
+func (s *Store) EnableProvenance(log *Log) { s.prov = log }
 
 // Reseal rescans the staging directory and updates the published code_ids.
 //
@@ -53,11 +60,27 @@ func (s *Store) Reseal() error {
 		if layout.ValidateEnvironment(env) != nil {
 			continue
 		}
-		id, err := seal.CodeID(filepath.Join(s.StagingDir, env))
+		envDir := filepath.Join(s.StagingDir, env)
+		id, err := seal.CodeID(envDir)
 		if err != nil {
 			return fmt.Errorf("sealing %s: %w", env, err)
 		}
 		next[env] = id
+
+		// Provenance is best-effort and must never fail a reseal: a deploy does
+		// not depend on knowing which commit produced it. A missing or malformed
+		// .r10k-deploy.json simply yields no record.
+		if s.prov != nil {
+			if d, ok := readDeployRecord(envDir); ok {
+				_ = s.prov.Record(Provenance{
+					CodeID:     id,
+					Env:        env,
+					Commit:     d.Signature,
+					DeployedAt: d.FinishedAt,
+					SealedAt:   time.Now().UTC(),
+				})
+			}
+		}
 	}
 
 	s.mu.Lock()
