@@ -115,6 +115,43 @@ func TestProvenanceSubcommandReadsLocalLog(t *testing.T) {
 	}
 }
 
+// TestConfigDrivesCommandState checks the config-to-command wiring end to end
+// through provenance, which reads its state directory and does no network I/O:
+// a config file supplies the state directory, and a --state flag overrides it.
+func TestConfigDrivesCommandState(t *testing.T) {
+	configured := t.TempDir()
+	rec := `{"code_id":"a3f1c9e4b2d8","environment":"production","commit":"cafef00d","sealed_at":"2026-07-24T16:00:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(configured, provenanceFile), []byte(rec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("state: "+configured+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The config's state directory is used when no --state flag is given.
+	out, err := captureStdout(t, func() error {
+		return run("provenance", []string{"--config", cfgPath, "production", "a3f1c9e4b2d8"})
+	})
+	if err != nil {
+		t.Fatalf("provenance with config: %v", err)
+	}
+	if !strings.Contains(out, "cafef00d") {
+		t.Errorf("config-supplied state was not used; output = %q", out)
+	}
+
+	// A --state flag overrides the config: an empty dir yields no record.
+	out, err = captureStdout(t, func() error {
+		return run("provenance", []string{"--config", cfgPath, "--state", t.TempDir(), "production", "a3f1c9e4b2d8"})
+	})
+	if err != nil {
+		t.Fatalf("provenance with overriding --state: %v", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("--state did not override config; output = %q", out)
+	}
+}
+
 func TestProvenanceSubcommandRejectsBadArgs(t *testing.T) {
 	cases := map[string][]string{
 		"one argument":        {"production"},

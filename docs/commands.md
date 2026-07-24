@@ -16,7 +16,9 @@ The compiler-side commands (`code-id`, `code-content`) and the operator command
 `provenance` are documented here. The daemons `publish`, `agent`, and
 `deploy-server`, and the `deploy` command, have their own pages:
 [publishing.md](publishing.md), [agent.md](agent.md),
-[deploy-server.md](deploy-server.md), and [deploying.md](deploying.md).
+[deploy-server.md](deploy-server.md), and [deploying.md](deploying.md). The
+operator commands share a config file, described in
+[configuration.md](configuration.md).
 
 ---
 

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/miharp/codavox/internal/agent"
+	"github.com/miharp/codavox/internal/config"
 	"github.com/miharp/codavox/internal/content"
 	"github.com/miharp/codavox/internal/deploy"
 	"github.com/miharp/codavox/internal/deployserver"
@@ -80,8 +81,14 @@ Usage:
   codavox version
         Print the codavox version.
 
+The publish, agent, deploy, deploy-server, and provenance commands read shared
+settings from a config file (--config <file>, or CODAVOX_CONFIG, default
+/etc/codavox/config.yaml). A flag overrides the file; the file overrides the
+built-in default.
+
 Environment:
-  CODAVOX_ROOT   Override the deployment root (default %s).
+  CODAVOX_ROOT     Override the deployment root (default %s).
+  CODAVOX_CONFIG   Override the config file path (default /etc/codavox/config.yaml).
 `
 
 // version is overridden at build time via -ldflags.
@@ -275,6 +282,19 @@ func publishServe(args []string) error {
 		state:  defaultStateDir(),
 	}
 
+	cfg, err := config.Load(configPath(args))
+	if err != nil {
+		return err
+	}
+	overlay(&opts.staging, cfg.Staging)
+	overlay(&opts.state, cfg.State)
+	overlay(&opts.ssldir, cfg.SSLDir)
+	overlay(&opts.certname, cfg.Certname)
+	overlay(&opts.listen, cfg.Publish.Listen)
+	if len(cfg.Publish.AllowRoles) > 0 {
+		opts.roles = cfg.Publish.AllowRoles
+	}
+
 	for i := 0; i < len(args); i++ {
 		next := func() (string, error) {
 			i++
@@ -285,6 +305,8 @@ func publishServe(args []string) error {
 		}
 		var err error
 		switch args[i] {
+		case "--config":
+			_, err = next() // already loaded; consume the value
 		case "--staging":
 			opts.staging, err = next()
 		case "--listen":
@@ -407,6 +429,28 @@ func agentRun(args []string) error {
 		minAge:   agent.DefaultMinAge,
 	}
 
+	cfg, err := config.Load(configPath(args))
+	if err != nil {
+		return err
+	}
+	overlay(&opts.publisher, cfg.Agent.Publisher)
+	overlay(&opts.certname, cfg.Certname)
+	overlay(&opts.ssldir, cfg.SSLDir)
+	overlay(&opts.envPath, cfg.EnvironmentPath)
+	if cfg.Agent.Keep > 0 {
+		opts.keep = cfg.Agent.Keep
+	}
+	if cfg.Agent.Interval != "" {
+		if opts.interval, err = time.ParseDuration(cfg.Agent.Interval); err != nil {
+			return fmt.Errorf("config agent.interval: %w", err)
+		}
+	}
+	if cfg.Agent.MinAge != "" {
+		if opts.minAge, err = time.ParseDuration(cfg.Agent.MinAge); err != nil {
+			return fmt.Errorf("config agent.min_age: %w", err)
+		}
+	}
+
 	for i := 0; i < len(args); i++ {
 		next := func() (string, error) {
 			i++
@@ -418,6 +462,8 @@ func agentRun(args []string) error {
 		var err error
 		var v string
 		switch args[i] {
+		case "--config":
+			_, err = next()
 		case "--publisher":
 			opts.publisher, err = next()
 		case "--certname":
@@ -517,6 +563,15 @@ func deployRun(args []string) error {
 		state: defaultStateDir(),
 	}
 
+	cfg, err := config.Load(configPath(args))
+	if err != nil {
+		return err
+	}
+	overlay(&opts.staging, cfg.Staging)
+	overlay(&opts.state, cfg.State)
+	overlay(&opts.r10k, cfg.R10k)
+	overlay(&opts.r10kConfig, cfg.R10kConfig)
+
 	for i := 0; i < len(args); i++ {
 		next := func() (string, error) {
 			i++
@@ -527,6 +582,8 @@ func deployRun(args []string) error {
 		}
 		var err error
 		switch a := args[i]; a {
+		case "--config":
+			_, err = next()
 		case "--all":
 			opts.all = true
 		case "--wait":
@@ -633,6 +690,23 @@ func deployServer(args []string) error {
 		history: 100,
 	}
 
+	cfg, err := config.Load(configPath(args))
+	if err != nil {
+		return err
+	}
+	overlay(&opts.apiTokenFile, cfg.DeployServer.APIToken)
+	overlay(&opts.secretFile, cfg.DeployServer.Secret)
+	overlay(&opts.listen, cfg.DeployServer.Listen)
+	overlay(&opts.staging, cfg.Staging)
+	overlay(&opts.state, cfg.State)
+	overlay(&opts.r10k, cfg.R10k)
+	overlay(&opts.r10kConfig, cfg.R10kConfig)
+	overlay(&opts.certname, cfg.Certname)
+	overlay(&opts.ssldir, cfg.SSLDir)
+	if cfg.DeployServer.History > 0 {
+		opts.history = cfg.DeployServer.History
+	}
+
 	for i := 0; i < len(args); i++ {
 		next := func() (string, error) {
 			i++
@@ -644,6 +718,8 @@ func deployServer(args []string) error {
 		var err error
 		var v string
 		switch args[i] {
+		case "--config":
+			_, err = next()
 		case "--api-token":
 			opts.apiTokenFile, err = next()
 		case "--secret":
@@ -783,6 +859,25 @@ func deployServerRoles(apiToken, secret []byte) string {
 // provenanceFile is the publisher's provenance log, relative to the state dir.
 const provenanceFile = "provenance.jsonl"
 
+// configPath scans args for --config so the file can be loaded before the flag
+// loop runs, since the file seeds the defaults the flags then override.
+func configPath(args []string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--config" {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// overlay sets *dst to v when v is non-empty. It applies a config value on top
+// of a built-in default, before flags are parsed.
+func overlay(dst *string, v string) {
+	if v != "" {
+		*dst = v
+	}
+}
+
 // defaultStateDir is where the publisher keeps its provenance log. It lives
 // under the codavox root but is publisher-only diagnostic state: it never
 // reaches a compiler and never feeds code-id, which stays a single symlink read.
@@ -803,8 +898,19 @@ func provenanceQuery(args []string) error {
 		positional []string
 	)
 
+	cfg, err := config.Load(configPath(args))
+	if err != nil {
+		return err
+	}
+	overlay(&state, cfg.State)
+
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
+		case "--config":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--config needs a value")
+			}
 		case "--state":
 			i++
 			if i >= len(args) {
