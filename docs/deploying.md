@@ -84,6 +84,26 @@ second deploy waits for the first to finish rather than racing it. The lock is
 advisory and released if the holder exits, so a crashed deploy does not wedge
 it.
 
+## Deleting environments
+
+When a branch is removed from the control repo, its environment is deleted by
+letting r10k purge it from staging and letting each compiler's agent prune it.
+
+Configure r10k to purge removed environments — codavox does not do this, because
+`deploy` only observes r10k's output:
+
+```yaml
+# r10k.yaml
+deploy:
+  purge_levels: [environment]
+```
+
+With that set, deleting a branch and redeploying removes the environment
+directory from staging, so `publish` stops advertising it. Each compiler running
+the agent with [`--prune-environments`](agent.md#pruning-deleted-environments)
+then removes it. Both halves are opt-in — codavox never deletes an operator's
+code by default.
+
 ## Other ways to deploy
 
 `deploy` is the command-line front door onto the deploy path. Two others reuse

@@ -33,6 +33,9 @@ type Config struct {
 	Keep int
 	// MinAge is how long a superseded version is retained regardless of Keep.
 	MinAge time.Duration
+	// Prune removes environments the publisher no longer advertises. It is off
+	// by default: deleting an environment is destructive, so an operator opts in.
+	Prune  bool
 	Logger *slog.Logger
 }
 
@@ -120,6 +123,14 @@ func (a *Agent) Once(ctx context.Context) error {
 		if err := a.reap(env, codeID); err != nil {
 			a.cfg.Logger.Warn("reaping old versions failed", "environment", env, "error", err)
 		}
+	}
+
+	// Prune runs only after a successful fetch (a failed one returned above), so
+	// a publisher outage is never mistaken for "every environment was deleted."
+	// It is independent of per-environment sync failures: a failed sync leaves
+	// the environment in want, so it is never a prune candidate.
+	if a.cfg.Prune {
+		a.prune(want)
 	}
 
 	if len(failures) > 0 {
@@ -287,6 +298,14 @@ func (a *Agent) swap(env, codeID string) error {
 // will still request file content for it, and deleting that tree turns a
 // successful run into a failed one.
 func (a *Agent) reap(env, current string) error {
+	return a.reapVersions(env, current, a.cfg.Keep)
+}
+
+// reapVersions removes an environment's superseded versions, keeping the current
+// one, the most recent keep, and anything younger than MinAge. A deleted
+// environment passes current="" and keep=0, so only the age guard protects its
+// versions and they all disappear once past MinAge.
+func (a *Agent) reapVersions(env, current string, keep int) error {
 	versionsDir := filepath.Join(a.cfg.Layout.Root, "versions")
 	entries, err := os.ReadDir(versionsDir)
 	if err != nil {
@@ -328,7 +347,7 @@ func (a *Agent) reap(env, current string) error {
 
 	cutoff := time.Now().Add(-a.cfg.MinAge)
 	for i, v := range candidates {
-		if i < a.cfg.Keep {
+		if i < keep {
 			continue
 		}
 		if v.modTime.After(cutoff) {
@@ -341,4 +360,71 @@ func (a *Agent) reap(env, current string) error {
 		a.cfg.Logger.Info("reaped old version", "environment", env, "version", v.name)
 	}
 	return nil
+}
+
+// prune removes environments the publisher no longer advertises.
+//
+// It never acts on an empty advertisement: a publisher serving zero
+// environments is far more likely misconfigured, or pointed at an empty staging
+// directory, than deliberately deleting every environment at once. Deleting the
+// last environment stays a manual action.
+func (a *Agent) prune(want map[string]string) {
+	if len(want) == 0 {
+		a.cfg.Logger.Warn("publisher advertised no environments; skipping prune")
+		return
+	}
+	local, err := a.localEnvironments()
+	if err != nil {
+		a.cfg.Logger.Warn("listing local environments failed; skipping prune", "error", err)
+		return
+	}
+	for _, env := range local {
+		if _, kept := want[env]; kept {
+			continue
+		}
+		if err := a.pruneEnvironment(env); err != nil {
+			a.cfg.Logger.Warn("pruning environment failed", "environment", env, "error", err)
+		}
+	}
+}
+
+// localEnvironments lists the environments deployed on this node — the symlinks
+// under the environment path. Dot-prefixed temporary swap files and anything
+// that is not a symlink are skipped.
+func (a *Agent) localEnvironments() ([]string, error) {
+	entries, err := os.ReadDir(a.cfg.Layout.EnvironmentPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var envs []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") || e.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		if layout.ValidateEnvironment(e.Name()) != nil {
+			continue
+		}
+		envs = append(envs, e.Name())
+	}
+	return envs, nil
+}
+
+// pruneEnvironment removes a deleted environment.
+//
+// The symlink goes immediately, so new catalog compiles for the environment
+// fail loudly, which is correct — it no longer exists. Its version directories
+// are reaped only once older than MinAge, so an in-flight agent run that still
+// requests file content by code_id is not cut off; code-content resolves the
+// version directory directly, without the symlink.
+func (a *Agent) pruneEnvironment(env string) error {
+	link := a.cfg.Layout.EnvironmentLink(env)
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing environment link: %w", err)
+	}
+	a.cfg.Logger.Info("pruned environment", "environment", env)
+	// No current version to keep and no keep-count: only the age guard applies.
+	return a.reapVersions(env, "", 0)
 }

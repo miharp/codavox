@@ -79,6 +79,7 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | `agent.interval` | agent | `--interval` |
 | `agent.keep` | agent | `--keep` |
 | `agent.min_age` | agent | `--min-age` |
+| `agent.prune_environments` | agent | `--prune-environments` |
 
 ## Typos are errors
 

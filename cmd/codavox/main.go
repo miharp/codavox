@@ -56,8 +56,10 @@ Usage:
 
   codavox agent --publisher <url> [--interval <dur>] [--once]
                 [--certname <name>] [--ssldir <dir>] [--environmentpath <dir>]
-                [--keep <n>] [--min-age <dur>]
+                [--keep <n>] [--min-age <dur>] [--prune-environments]
         Poll a publisher and converge this compiler onto the code it serves.
+        With --prune-environments, also remove environments the publisher no
+        longer serves.
 
   codavox deploy <environment>... | --all [--wait] [--no-modules]
                  [--r10k <path>] [--r10k-config <file>]
@@ -421,6 +423,7 @@ func agentRun(args []string) error {
 		keep      int
 		minAge    time.Duration
 		once      bool
+		prune     bool
 	}{
 		ssldir:   puppetca.DefaultSSLDir,
 		envPath:  layout.DefaultEnvironmentPath,
@@ -432,6 +435,9 @@ func agentRun(args []string) error {
 	cfg, err := config.Load(configPath(args))
 	if err != nil {
 		return err
+	}
+	if cfg.Agent.PruneEnvironments {
+		opts.prune = true
 	}
 	overlay(&opts.publisher, cfg.Agent.Publisher)
 	overlay(&opts.certname, cfg.Certname)
@@ -474,6 +480,8 @@ func agentRun(args []string) error {
 			opts.envPath, err = next()
 		case "--once":
 			opts.once = true
+		case "--prune-environments":
+			opts.prune = true
 		case "--interval":
 			if v, err = next(); err == nil {
 				opts.interval, err = time.ParseDuration(v)
@@ -524,6 +532,7 @@ func agentRun(args []string) error {
 		Interval: opts.interval,
 		Keep:     opts.keep,
 		MinAge:   opts.minAge,
+		Prune:    opts.prune,
 	})
 	if err != nil {
 		return err

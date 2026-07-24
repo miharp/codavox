@@ -135,8 +135,10 @@ do not pay for it in source coupling.
 - **Reaping vs in-flight agents.** *Solved:* the agent keeps a version while it
   is current, among the most recent *keep*, or younger than *min-age*, so a
   code_id an in-flight run still requests via code-content is never deleted.
-- **Environment deletion** propagating correctly to compilers. *Still open* — a
-  branch removed from the control repo is not yet reaped from compilers.
+- **Environment deletion** propagating to compilers. *Addressed, opt-in:* with
+  `--prune-environments`, an agent removes an environment the publisher no longer
+  serves, guarded so a failed or empty poll never deletes. It relies on r10k
+  purging the removed environment from staging.
 - **puppetserver's environment cache** interacting with symlink swaps.
 - **Poller robustness** — *addressed:* a poll failure is logged and retried on
   the next tick rather than being fatal, so a publisher outage degrades to "no
