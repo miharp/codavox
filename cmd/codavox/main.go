@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -52,6 +53,10 @@ Usage:
                 [--certname <name>] [--ssldir <dir>] [--environmentpath <dir>]
                 [--keep <n>] [--min-age <dur>]
         Poll a publisher and converge this compiler onto the code it serves.
+
+  codavox provenance <environment> <code-id> [--state <dir>] [--json]
+        Print the control-repo commit that produced a code_id, read from the
+        publisher's local provenance log. Run this on the publisher.
 
   codavox version
         Print the codavox version.
@@ -111,6 +116,8 @@ func run(cmd string, args []string) error {
 		return publishServe(args)
 	case "agent":
 		return agentRun(args)
+	case "provenance":
+		return provenanceQuery(args)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -235,10 +242,12 @@ func publishServe(args []string) error {
 		listen   string
 		certname string
 		ssldir   string
+		state    string
 		roles    []string
 	}{
 		listen: ":8150",
 		ssldir: puppetca.DefaultSSLDir,
+		state:  defaultStateDir(),
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -259,6 +268,8 @@ func publishServe(args []string) error {
 			opts.certname, err = next()
 		case "--ssldir":
 			opts.ssldir, err = next()
+		case "--state":
+			opts.state, err = next()
 		case "--allow-role":
 			var r string
 			if r, err = next(); err == nil {
@@ -293,6 +304,13 @@ func publishServe(args []string) error {
 	}
 
 	store := publish.NewStore(opts.staging)
+
+	provLog, err := publish.OpenLog(filepath.Join(opts.state, provenanceFile))
+	if err != nil {
+		return err
+	}
+	store.EnableProvenance(provLog)
+
 	if err := store.Reseal(); err != nil {
 		return err
 	}
@@ -411,6 +429,91 @@ func agentRun(args []string) error {
 
 	if err := a.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
+	}
+	return nil
+}
+
+// provenanceFile is the publisher's provenance log, relative to the state dir.
+const provenanceFile = "provenance.jsonl"
+
+// defaultStateDir is where the publisher keeps its provenance log. It lives
+// under the codavox root but is publisher-only diagnostic state: it never
+// reaches a compiler and never feeds code-id, which stays a single symlink read.
+func defaultStateDir() string {
+	return filepath.Join(layout.New().Root, "state")
+}
+
+// provenanceQuery prints the control-repo provenance recorded for a code_id.
+//
+// It reads the publisher's local log directly and does no network I/O, so it
+// must be run on the publisher. An empty result is reported honestly rather
+// than as an error: provenance is best-effort, so its absence must never be
+// dressed up as some other version's history.
+func provenanceQuery(args []string) error {
+	var (
+		state      = defaultStateDir()
+		asJSON     bool
+		positional []string
+	)
+
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
+		case "--state":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--state needs a value")
+			}
+			state = args[i]
+		case "--json":
+			asJSON = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				return fmt.Errorf("unknown flag %q", a)
+			}
+			positional = append(positional, a)
+		}
+	}
+
+	if len(positional) != 2 {
+		return fmt.Errorf("provenance takes two arguments: <environment> <code-id>")
+	}
+	env, codeID := positional[0], positional[1]
+	if err := layout.ValidateEnvironment(env); err != nil {
+		return err
+	}
+	if err := layout.ValidateCodeID(codeID); err != nil {
+		return err
+	}
+
+	log, err := publish.OpenLog(filepath.Join(state, provenanceFile))
+	if err != nil {
+		return err
+	}
+	records := log.Lookup(env, codeID)
+
+	if asJSON {
+		if records == nil {
+			records = []publish.Provenance{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(records)
+	}
+
+	if len(records) == 0 {
+		fmt.Fprintf(os.Stderr, "no provenance recorded for %s in %s\n", codeID, env)
+		return nil
+	}
+	for _, p := range records {
+		commit := p.Commit
+		if commit == "" {
+			commit = "(unknown commit)"
+		}
+		deployed := p.DeployedAt
+		if deployed == "" {
+			deployed = "unknown"
+		}
+		fmt.Printf("%s\tdeployed %s\tsealed %s\n", commit, deployed, p.SealedAt.Format(time.RFC3339))
 	}
 	return nil
 }
