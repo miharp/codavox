@@ -153,7 +153,9 @@ $ codavox deploy production --wait --staging /etc/puppetlabs/code-staging
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
 ```
 
-On each compiler, run the agent and point OpenVox Server at codavox:
+On each compiler, run the agent to pull that code, then wire OpenVox Server to
+codavox — in that order, because a compiler wired before its agent has converged
+has no code to serve and its catalog compiles fail:
 
 ```console
 # converge this compiler onto whatever the publisher serves (run as a service)
@@ -163,6 +165,11 @@ $ codavox agent --publisher https://puppet.example.com:8150
 $ codavox code-id production
 a3f1c9e4b2d8
 ```
+
+Wiring OpenVox Server at codavox — its `versioned-code.conf` and
+`environmentpath` — is a one-time step per compiler. See
+[installation.md](docs/installation.md), which covers the safe order and how to
+canary one compiler first.
 
 For push-to-deploy and CI, run `codavox deploy-server` on the primary: a push
 webhook and a token-authenticated deploy API with status and history, the way
