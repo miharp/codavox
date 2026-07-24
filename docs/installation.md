@@ -57,12 +57,12 @@ URL. Both package managers resolve dependencies and support clean removal when
 installing from a file.
 
 ```console
-dnf install https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_arm64.rpm
+dnf install https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.rpm
 ```
 
 ```console
-curl -fsSLO https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_arm64.deb
-apt-get install -y ./codavox_0.1.0_linux_arm64.deb
+curl -fsSLO https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.deb
+apt-get install -y ./codavox_0.2.0_linux_arm64.deb
 ```
 
 There is no package repository yet. Hosting one means `createrepo`, an apt

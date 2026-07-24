@@ -124,13 +124,13 @@ Download the package for your architecture from the
 
 ```console
 # RPM — Rocky, RHEL, AlmaLinux, CentOS Stream
-dnf install https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_arm64.rpm
+dnf install https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.rpm
 ```
 
 ```console
 # DEB — Debian, Ubuntu
-curl -fsSLO https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_arm64.deb
-apt-get install -y ./codavox_0.1.0_linux_arm64.deb
+curl -fsSLO https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.deb
+apt-get install -y ./codavox_0.2.0_linux_arm64.deb
 ```
 
 Pick `arm64` or `amd64` to match the host — OpenVox on Apple silicon is `arm64`.
