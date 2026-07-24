@@ -86,10 +86,9 @@ snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
 
 changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+  # GitHub's native release-note generation produces a clean "What's Changed"
+  # list from the merged pull requests — with links and contributors — rather
+  # than a flat, alphabetical dump of every commit. sort, filters, and groups do
+  # not apply here; GitHub controls the format. Categorize by PR label with a
+  # .github/release.yml if that is ever wanted.
+  use: github-native
