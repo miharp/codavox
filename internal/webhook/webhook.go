@@ -1,15 +1,13 @@
-// Package webhook receives control-repo push notifications and deploys the
-// pushed environment.
+// Package webhook parses and authenticates control-repo push notifications.
 //
-// It is a front door onto the deploy path, not a second implementation of it:
-// a push is authenticated, mapped to an environment, and handed to a Deployer,
-// which the command wires to the same internal/deploy.Run the CLI uses. Keeping
-// r10k behind that seam is what lets the whole request path be tested without
-// running a deploy.
+// It is a pure request mapper: given a push from GitHub, GitLab, or a generic
+// caller, it verifies the shared secret and reports which environment to
+// deploy. It does not deploy or hold state — the deploy server owns the queue,
+// the worker, and the history — so the whole parse-and-authenticate path is
+// testable on its own.
 package webhook
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -17,8 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -26,110 +22,47 @@ import (
 	"github.com/miharp/codavox/internal/layout"
 )
 
-// Deployer deploys a single environment. The real implementation wraps
-// internal/deploy.Run; tests substitute a recorder.
-type Deployer interface {
-	Deploy(env string) error
-}
+// MaxBodyBytes caps a payload the caller should read. GitHub documents a 25 MiB
+// maximum, and the whole body must be read to verify the HMAC, so this is that
+// ceiling.
+const MaxBodyBytes = 25 << 20
 
-const (
-	// DefaultQueueDepth bounds how many deploys can be pending before the
-	// receiver sheds load with 503 rather than growing unboundedly.
-	DefaultQueueDepth = 64
-	// maxBodyBytes caps a payload. GitHub documents a 25 MiB maximum, and the
-	// whole body must be read to verify the HMAC, so this is that ceiling.
-	maxBodyBytes = 25 << 20
-)
-
-// Handler is the webhook HTTP handler and its deploy worker.
-type Handler struct {
-	secret   []byte
-	deployer Deployer
-	logger   *slog.Logger
-	queue    chan string
-	mux      http.Handler
-}
-
-// New returns a Handler. Call Start to run the deploy worker.
-func New(secret []byte, d Deployer, logger *slog.Logger) *Handler {
-	h := &Handler{
-		secret:   secret,
-		deployer: d,
-		logger:   logger,
-		queue:    make(chan string, DefaultQueueDepth),
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/webhook", h.handleWebhook)
-	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	h.mux = mux
-	return h
-}
-
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
-
-// Start runs the deploy worker until ctx is cancelled.
-//
-// Deploys run one at a time: r10k mutates the staging directory in place, so
-// concurrent deploys would clobber each other. A burst of pushes queues behind
-// the single worker rather than racing.
-func (h *Handler) Start(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case env := <-h.queue:
-			if err := h.deployer.Deploy(env); err != nil {
-				h.logger.Error("webhook deploy failed", "environment", env, "error", err)
-			}
+// Authenticate verifies the request against the shared secret, choosing the
+// scheme by provider: GitHub's HMAC over the body, or GitLab's and the generic
+// caller's token.
+func Authenticate(secret []byte, r *http.Request, body []byte) error {
+	switch detectProvider(r) {
+	case "github":
+		return verifyGitHubSignature(secret, body, r.Header.Get("X-Hub-Signature-256"))
+	case "gitlab":
+		if !secretEqual(secret, []byte(r.Header.Get("X-Gitlab-Token"))) {
+			return errors.New("gitlab token mismatch")
 		}
+		return nil
+	default:
+		if !secretEqual(secret, []byte(genericToken(r))) {
+			return errors.New("token mismatch")
+		}
+		return nil
 	}
 }
 
-func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+// Environment maps a push to the environment to deploy. ignore is true for
+// events that are valid but deploy nothing — pings, non-push events, branch
+// deletions, and non-branch refs — with reason describing why.
+func Environment(r *http.Request, body []byte) (env string, ignore bool, reason string, err error) {
+	ev, err := parseEvent(detectProvider(r), r, body)
 	if err != nil {
-		http.Error(w, "reading body", http.StatusBadRequest)
-		return
-	}
-
-	provider := detectProvider(r)
-	if err := h.authenticate(provider, r, body); err != nil {
-		// Do not echo the reason to the caller; log it for the operator.
-		h.logger.Warn("webhook authentication failed", "provider", provider, "error", err)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	ev, err := parseEvent(provider, r, body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return "", false, "", err
 	}
 	if ev.ignore {
-		// 200 so the provider records success and does not retry a push we
-		// intentionally did nothing with.
-		h.logger.Info("webhook ignored", "provider", provider, "reason", ev.reason)
-		w.WriteHeader(http.StatusOK)
-		return
+		return "", true, ev.reason, nil
 	}
-
-	env, err := environmentFromRef(ev.ref)
+	env, err = environmentFromRef(ev.ref)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return "", false, "", err
 	}
-
-	select {
-	case h.queue <- env:
-		h.logger.Info("webhook deploy queued", "provider", provider, "environment", env)
-		w.WriteHeader(http.StatusAccepted)
-	default:
-		// The worker is behind; shed load rather than block the provider.
-		http.Error(w, "deploy queue full", http.StatusServiceUnavailable)
-	}
+	return env, false, "", nil
 }
 
 func detectProvider(r *http.Request) string {
@@ -140,23 +73,6 @@ func detectProvider(r *http.Request) string {
 		return "gitlab"
 	default:
 		return "generic"
-	}
-}
-
-func (h *Handler) authenticate(provider string, r *http.Request, body []byte) error {
-	switch provider {
-	case "github":
-		return verifyGitHubSignature(h.secret, body, r.Header.Get("X-Hub-Signature-256"))
-	case "gitlab":
-		if !secretEqual(h.secret, []byte(r.Header.Get("X-Gitlab-Token"))) {
-			return errors.New("gitlab token mismatch")
-		}
-		return nil
-	default:
-		if !secretEqual(h.secret, []byte(genericToken(r))) {
-			return errors.New("token mismatch")
-		}
-		return nil
 	}
 }
 
