@@ -104,6 +104,25 @@ func (p Paths) ServerTLS(allowedRoles ...string) (*tls.Config, error) {
 	}, nil
 }
 
+// ServerCertTLS builds a server TLS configuration that presents the node's
+// certificate but requires none from the client.
+//
+// It is for endpoints that must accept peers which cannot present a Puppet
+// certificate — a webhook from GitHub or GitLab — where authentication is by
+// shared secret rather than by mutual TLS. The publisher's artifact API uses
+// ServerTLS instead; this is deliberately weaker and belongs only where the
+// caller is authenticated another way.
+func (p Paths) ServerCertTLS() (*tls.Config, error) {
+	cert, _, err := p.Load()
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
 // ClientTLS builds a TLS configuration for a compiler fetching artifacts.
 func (p Paths) ClientTLS() (*tls.Config, error) {
 	cert, pool, err := p.Load()

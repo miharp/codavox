@@ -57,9 +57,13 @@ $ codavox code-id production
 a3f1c9e4b2d8
 ```
 
+For push-to-deploy, run `codavox webhook` on the primary and point your control
+repo at it — a push deploys the matching environment, the way Code Manager's
+webhook does.
+
 Compilers **poll**, so one that was down catches up on its own. See
-[deploying.md](docs/deploying.md), [publishing.md](docs/publishing.md), and
-[agent.md](docs/agent.md).
+[deploying.md](docs/deploying.md), [webhooks.md](docs/webhooks.md),
+[publishing.md](docs/publishing.md), and [agent.md](docs/agent.md).
 
 ## Quick look
 
@@ -84,6 +88,7 @@ never a silent fall back to whatever is current.
 | document | contents |
 |---|---|
 | [deploying.md](docs/deploying.md) | Running `codavox deploy`, r10k invocation, the reseal trigger, `--wait` |
+| [webhooks.md](docs/webhooks.md) | Deploying on control-repo push; GitHub, GitLab, and generic providers |
 | [agent.md](docs/agent.md) | Running the compiler-side agent, verification, atomic swap, reaping |
 | [publishing.md](docs/publishing.md) | Running the publisher, mutual TLS, and the role constraint |
 | [sealing.md](docs/sealing.md) | How a code_id is derived, what is excluded, and why |
