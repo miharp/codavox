@@ -1,0 +1,33 @@
+# codavox configuration. Copy to /etc/codavox/config.yaml and edit.
+#
+# Every setting here is also a command-line flag. A flag overrides this file,
+# and this file overrides the built-in default. See docs/configuration.md.
+#
+# code-id and code-content do not read this file: they run on every catalog
+# compile and stay a single symlink read.
+
+# Shared paths, used by publish, deploy, and deploy-server.
+staging:  /etc/puppetlabs/code-staging
+state:    /opt/puppetlabs/codavox/state
+ssldir:   /etc/puppetlabs/puppet/ssl
+certname: puppet.example.com
+
+# r10k, used by deploy and deploy-server.
+r10k:        /opt/puppetlabs/puppet/bin/r10k
+r10k_config: /etc/puppetlabs/r10k/r10k.yaml
+
+publish:
+  listen: ":8150"
+  allow_roles: [openvox_compiler]
+
+deploy_server:
+  listen: ":8170"
+  api_token: /etc/codavox/api.token
+  secret:    /etc/codavox/webhook.secret
+  history: 100
+
+agent:
+  publisher: https://puppet.example.com:8150
+  interval:  30s
+  keep:      3
+  min_age:   2h

@@ -88,6 +88,7 @@ never a silent fall back to whatever is current.
 
 | document | contents |
 |---|---|
+| [configuration.md](docs/configuration.md) | The shared config file: location, precedence, and every setting |
 | [deploying.md](docs/deploying.md) | Running `codavox deploy`, r10k invocation, the reseal trigger, `--wait` |
 | [deploy-server.md](docs/deploy-server.md) | The deploy API and push webhook; deploy status and history |
 | [agent.md](docs/agent.md) | Running the compiler-side agent, verification, atomic swap, reaping |
