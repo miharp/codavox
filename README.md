@@ -120,17 +120,20 @@ silent bug.
 ## Install
 
 Download the package for your architecture from the
-[releases page](https://github.com/miharp/codavox/releases) and install it by URL:
+[releases page](https://github.com/miharp/codavox/releases). Set `VERSION` to the
+latest release, then install by URL:
 
 ```console
 # RPM — Rocky, RHEL, AlmaLinux, CentOS Stream
-dnf install https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.rpm
+VERSION=0.2.1
+dnf install "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.rpm"
 ```
 
 ```console
 # DEB — Debian, Ubuntu
-curl -fsSLO https://github.com/miharp/codavox/releases/download/v0.2.0/codavox_0.2.0_linux_arm64.deb
-apt-get install -y ./codavox_0.2.0_linux_arm64.deb
+VERSION=0.2.1
+curl -fsSLO "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.deb"
+apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 ```
 
 Pick `arm64` or `amd64` to match the host — OpenVox on Apple silicon is `arm64`.
