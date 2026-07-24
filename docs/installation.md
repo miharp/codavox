@@ -13,6 +13,42 @@ dependencies, so one package per architecture covers every supported distro.
 **Pick the right architecture.** OpenVox hosts on Apple silicon — Parallels VMs
 and Docker on M-series — are `aarch64`/`arm64`, not `amd64`.
 
+## Where to install it
+
+Install the same package on the **primary** and on **every compiler**. It is one
+binary; which parts run depends on the node:
+
+| node | what runs there |
+|---|---|
+| Primary | `codavox publish`, and `codavox deploy` / `codavox deploy-server` — stages code and serves versioned artifacts to compilers |
+| Each compiler | `codavox agent`, which pulls that code, plus `codavox-code-id` and `codavox-code-content`, which OpenVox Server invokes on every catalog compile |
+
+The `codavox-code-id` and `codavox-code-content` symlinks matter on the
+**compilers** — that is where OpenVox Server compiles catalogs and calls them.
+So on each compiler, after installing, you point OpenVox Server at codavox and
+run the agent; see [Wiring into puppetserver](commands.md#wiring-into-puppetserver)
+and [agent.md](agent.md).
+
+## Installing is safe; the cutover is the careful part
+
+Installing the package changes nothing about how a compiler compiles catalogs
+(see [What the package installs](#what-the-package-installs)) — a compiler that
+has the package but is not yet wired behaves exactly as before. The care is in
+*wiring* one, because codavox has no fallback: once you point `environmentpath`
+at codavox and set the two commands, catalog compilation depends on the agent
+having deployed code there. Wire a compiler before its agent has converged and
+every catalog compile fails — loudly, which is the point, but it fails.
+
+So bring a compiler online in this order:
+
+1. Install the package (inert).
+2. Run `codavox agent` and let it converge — the environment links now exist.
+3. *Then* set `versioned-code.conf` and `environmentpath`.
+4. Canary one compiler and confirm catalogs compile before rolling the fleet.
+
+It is reversible: [remove the package](#upgrading-and-removing) and revert those
+two settings, and the compiler is back to stock.
+
 ## Install
 
 Download the package for your platform from the
