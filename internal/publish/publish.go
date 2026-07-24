@@ -327,6 +327,20 @@ func (srv *Server) Serve(ctx context.Context) error {
 	return nil
 }
 
+// ArtifactsDir is where the publisher materializes artifacts under a state dir.
+func ArtifactsDir(stateDir string) string { return filepath.Join(stateDir, "artifacts") }
+
+// ArtifactPathFor is the on-disk artifact file for a version under a state dir.
+// The deploy path uses it to wait for the publisher to have materialized a
+// version, which is the signal that a reseal has taken effect.
+func ArtifactPathFor(stateDir, env, codeID string) string {
+	return filepath.Join(ArtifactsDir(stateDir), layout.VersionDirName(env, codeID)+".tar.gz")
+}
+
+// PidFilePath is where the running publisher records its pid, so a deploy can
+// signal it to reseal.
+func PidFilePath(stateDir string) string { return filepath.Join(stateDir, "publish.pid") }
+
 // EnvironmentsPath is the polling endpoint compilers use.
 const EnvironmentsPath = "/v1/environments"
 

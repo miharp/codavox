@@ -5,12 +5,16 @@ open-source `versioned-code-service` hook.
 
 > A *coda* is the passage that brings every performance to the same close.
 
-**Status: early development.** All five commands work, and the full chain has
-been run against real OpenVox Server processes: two compilers converging over
-mutual TLS, a compiler catching up after missing a deploy, and an agent
-receiving a static catalog stamped with the codavox `code_id`. See
-[test/integration](test/integration/) and the
+**Status: early development.** The full chain works and has been run against
+real OpenVox Server processes: `codavox deploy` runs r10k and seals, two
+compilers converge over mutual TLS, a compiler catches up after missing a
+deploy, and an agent receives a static catalog stamped with the codavox
+`code_id`. See [test/integration](test/integration/) and the
 [implementation plan](docs/implementation-plan.md).
+
+If you are coming from Puppet Enterprise, codavox is the missing Code Manager
+piece for OpenVox: `codavox deploy production` is the same verb as
+`puppet-code deploy production`, on the same staging-to-compilers model.
 
 ## Why
 
@@ -27,6 +31,35 @@ divergence cannot even be detected, let alone corrected.
 codavox distributes resolved code artifacts addressed by a `code_id`. Compilers
 converge on their own, and agents get file content consistent with the catalog
 they were served, even if code changes mid-run.
+
+## Quickstart
+
+On the primary, serve staged code and deploy it — the deploy verb is the one
+you already know from `puppet-code`:
+
+```console
+# run the publisher (as a service), pointed at r10k's basedir
+$ codavox publish --staging /etc/puppetlabs/code-staging
+
+# deploy: runs r10k, seals, and serves — blocking until it is live
+$ codavox deploy production --wait --staging /etc/puppetlabs/code-staging
+production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
+```
+
+On each compiler, run the agent and point OpenVox Server at codavox's commands:
+
+```console
+# converge this compiler onto whatever the publisher serves (as a service)
+$ codavox agent --publisher https://puppet.example.com:8150
+
+# OpenVox Server then answers "which version am I serving?" in one symlink read
+$ codavox code-id production
+a3f1c9e4b2d8
+```
+
+Compilers **poll**, so one that was down catches up on its own. See
+[deploying.md](docs/deploying.md), [publishing.md](docs/publishing.md), and
+[agent.md](docs/agent.md).
 
 ## Quick look
 
@@ -50,6 +83,7 @@ never a silent fall back to whatever is current.
 
 | document | contents |
 |---|---|
+| [deploying.md](docs/deploying.md) | Running `codavox deploy`, r10k invocation, the reseal trigger, `--wait` |
 | [agent.md](docs/agent.md) | Running the compiler-side agent, verification, atomic swap, reaping |
 | [publishing.md](docs/publishing.md) | Running the publisher, mutual TLS, and the role constraint |
 | [sealing.md](docs/sealing.md) | How a code_id is derived, what is excluded, and why |
