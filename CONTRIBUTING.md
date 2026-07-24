@@ -11,21 +11,25 @@ golangci-lint run ./...
 gofmt -l .
 ```
 
-CI runs all of the above plus markdownlint, and cross-compiles `linux/amd64`
-and `linux/arm64`. Run them locally before opening a pull request.
+CI runs all of the above plus markdownlint and the benchmarks, and
+cross-compiles `linux/amd64` and `linux/arm64`. Run them locally before opening
+a pull request.
 
 ### Testing the commands by hand
 
-`CODAVOX_ROOT` overrides the deployment root, so you can exercise both commands
-without root or a real OpenVox Server:
+`CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH` override the deployment paths, so
+you can exercise both commands without root or a real OpenVox Server. `code-id`
+reads the environment symlink — there is no state file — so create one pointing
+at a version directory:
 
 ```console
 export CODAVOX_ROOT=/tmp/codavox-root
-mkdir -p "$CODAVOX_ROOT"/{state,versions/production_abc123/manifests}
-echo abc123 > "$CODAVOX_ROOT/state/production.codeid"
+export CODAVOX_ENVIRONMENTPATH="$CODAVOX_ROOT/environments"
+mkdir -p "$CODAVOX_ROOT/versions/production_abc123/manifests" "$CODAVOX_ENVIRONMENTPATH"
 echo 'node default { }' > "$CODAVOX_ROOT/versions/production_abc123/manifests/site.pp"
+ln -s "$CODAVOX_ROOT/versions/production_abc123" "$CODAVOX_ENVIRONMENTPATH/production"
 
-go run ./cmd/codavox code-id production
+go run ./cmd/codavox code-id production                               # -> abc123
 go run ./cmd/codavox code-content production abc123 manifests/site.pp
 ```
 
@@ -33,7 +37,7 @@ go run ./cmd/codavox code-content production abc123 manifests/site.pp
 
 Two rules are load-bearing. Changes that weaken either need a strong argument.
 
-**No fallbacks.** A missing state file, an undeployed `code_id`, or an
+**No fallbacks.** A missing environment link, an undeployed `code_id`, or an
 unreadable file is an error. Never substitute a generated value or content from
 a different version. Serving plausible-but-wrong content while exiting `0` is
 the exact failure static catalogs exist to prevent, and it fails silently.
@@ -69,23 +73,25 @@ Commit messages explain **why**, not what — the diff already shows what
 changed. Include the reasoning that would otherwise be lost, especially where a
 constraint from OpenVox Server's contract drove the design.
 
-> **Open question:** OpenVox projects require GPG-signed (`-S`) and DCO
-> signed-off (`-s`) commits. codavox does not enforce this yet. If it is ever
-> contributed to OpenVoxProject, retrofitting sign-off across existing history
-> means a rebase, so adopting it early is cheaper than adopting it later.
+Commits are **DCO signed-off** and **GPG-signed**, the way OpenVox projects
+expect. A `prepare-commit-msg` hook appends the `Signed-off-by` trailer for you;
+enable it once per clone, and turn on commit signing:
+
+```console
+git config core.hooksPath .githooks
+git config commit.gpgsign true
+```
+
+The hook adds the trailer only when one is not already present, so `git commit
+-s` still works. Signing needs a GPG key registered with your forge account.
 
 ## Documentation
 
-Keep these current as the code changes:
+The [README](README.md) links every document; keep them current as the code
+changes. Three carry specific obligations:
 
-| document | contents |
+| document | obligation |
 |---|---|
-| [README.md](README.md) | What it is, why, quick look |
-| [docs/commands.md](docs/commands.md) | Command reference — update with every user-visible change |
-| [docs/design.md](docs/design.md) | Architecture and rationale |
-| [docs/implementation-plan.md](docs/implementation-plan.md) | Phased build order and test topology |
-| [docs/versioned-code-contract.md](docs/versioned-code-contract.md) | The verified OpenVox Server interface |
-
-The contract document records behavior verified by reading openvox-server
-source. When updating it, cite the file and line rather than the
-documentation, and note the commit the claim was verified against.
+| [docs/commands.md](docs/commands.md) | Update with every user-visible change to a command |
+| [docs/configuration.md](docs/configuration.md) | Update when a flag or config setting changes |
+| [docs/versioned-code-contract.md](docs/versioned-code-contract.md) | Cite the openvox-server source file and line, and note the commit the claim was verified against — not the documentation |

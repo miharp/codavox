@@ -99,8 +99,8 @@ tree**. That last case matters: without it, a symlink inside a deployed tree
 would become an arbitrary file read on every compiler.
 
 ```console
-$ codavox code-content production a3f1c9e4b2d8 ../../state/production.codeid
-codavox: opening "../../state/production.codeid" in a3f1c9e4b2d8: openat ...: path escapes from parent
+$ codavox code-content production a3f1c9e4b2d8 ../../../../etc/passwd
+codavox: opening "../../../../etc/passwd" in a3f1c9e4b2d8: openat ../../../../etc/passwd: path escapes from parent
 ```
 
 ---
