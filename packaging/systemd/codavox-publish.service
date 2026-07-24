@@ -1,0 +1,17 @@
+[Unit]
+Description=codavox publisher (serves versioned code to compilers)
+Documentation=https://github.com/miharp/codavox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Flags come from /etc/codavox/config.yaml (staging, and any overrides).
+ExecStart=/usr/bin/codavox publish
+# codavox reseals on SIGHUP, so `systemctl reload codavox-publish` picks up a new
+# deploy. r10k's postrun hook can call it.
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=codavox agent (pulls versioned Puppet code onto this compiler)
+Documentation=https://github.com/miharp/codavox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Flags come from /etc/codavox/config.yaml (agent.publisher, and any overrides).
+ExecStart=/usr/bin/codavox agent
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
