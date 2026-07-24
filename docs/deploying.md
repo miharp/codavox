@@ -84,12 +84,13 @@ second deploy waits for the first to finish rather than racing it. The lock is
 advisory and released if the holder exits, so a crashed deploy does not wedge
 it.
 
-## Wiring it up
+## Other ways to deploy
 
-`deploy` is the deploy path other front doors will reuse. A webhook receiver and
-a deploy API — so a control-repo push or a CI job can deploy the way
-`puppet-code` does — call the same orchestration rather than reimplementing it.
-Those are tracked in the [implementation plan](implementation-plan.md).
+`deploy` is the command-line front door onto the deploy path. Two others reuse
+the same path rather than reimplementing it: a control-repo **push webhook** and
+a token-authenticated **deploy API**, both served by
+[`deploy-server`](deploy-server.md), so a push or a CI job deploys the way
+`puppet-code` does.
 
 ## Exit codes
 

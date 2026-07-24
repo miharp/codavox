@@ -3,6 +3,12 @@
 Written 2026-07-23. Companion to [design.md](design.md) and
 [versioned-code-contract.md](versioned-code-contract.md).
 
+> **Historical.** Phases 1 through 3 and the packaging are built and shipped;
+> `deploy`, the deploy API, and the webhook are done. What remains is the Forge
+> module (phase 4), the full integration-test suite (phase 5), and the git/OCI
+> transport swap (phase 6). This is kept as a record of the build order and the
+> reasoning; the [README](../README.md) links the current documentation.
+
 Integration testing runs on `~/projects/ovadm`'s Docker Compose environment,
 with `~/projects/control-repo` on Vagrant as a higher-fidelity tier-2 check.
 
@@ -353,12 +359,18 @@ improvement to the control-repo's existing static catalog setup.
 
 ---
 
-## 10. Decisions still open
+## 10. Decisions, since settled
 
-- **GitHub org** — blocks the Go module path. Decide first.
-- **Compiler CA relationship** — blocks phase 3 mTLS.
-- **Artifact format** — tarball for v1; git vs OCI for v2.
-- Whether `publish` should invoke r10k itself or observe a directory it does
-  not manage. *Leaning: observe. Not owning the deploy keeps the trust boundary
-  small and lets existing r10k workflows continue untouched.*
-- Trademark review of the name.
+- **GitHub org** — the module path is `github.com/miharp/codavox` for now; a move
+  to an OpenVox org is still possible.
+- **Compiler CA relationship** — *resolved:* mTLS reuses the Puppet CA material
+  already on each node; codavox issues no certificates.
+- **Whether `publish` invokes r10k or observes a directory** — *resolved:
+  observe.* `deploy` runs r10k centrally and `publish` only serves the resulting
+  staging dir, keeping the trust boundary small and existing r10k workflows
+  untouched.
+
+Still open:
+
+- **Artifact format** — tarball over HTTPS is what ships; git vs OCI for v2.
+- **Trademark review** of the name.

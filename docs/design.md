@@ -4,7 +4,8 @@
 > That is the job: get exactly the same code onto every compiler, and let each
 > one say precisely which version it is serving.
 
-Status: **design exploration.** Nothing implemented. Written 2026-07-23.
+Status: **implemented.** This records the architecture and the reasoning behind
+it; the design below is what codavox does. Originally written 2026-07-23.
 
 See [versioned-code-contract.md](versioned-code-contract.md) for the verified
 puppetserver interface this builds on.
@@ -54,10 +55,12 @@ is the constraint that forces central staging plus artifact distribution.
 2. **Seal** — content-hash the tree (hex; see contract). That hash *is* the code_id.
 3. **Publish** — authenticated endpoint exposing current code_id per environment.
 4. **Distribute** — compilers **poll**, fetch the artifact for the new code_id,
-   unpack to `…/code/<env>_<code_id>/`, then atomically swap a symlink.
-5. **Identify** — `code-id` reads the symlink target (via a cached file);
-   `code-content` serves `(code_id, path)` from the versioned dirs.
-6. **Reap** — drop old versions after a TTL exceeding the longest agent run.
+   unpack to `versions/<env>_<code_id>/`, then atomically swap a symlink.
+5. **Identify** — `code-id` reads the environment symlink directly; the symlink
+   is the only source of truth, with no separate state file. `code-content`
+   serves `(code_id, path)` from the versioned dirs.
+6. **Reap** — drop old versions once they are past a keep count and older than a
+   minimum age exceeding the longest agent run.
 
 ### Two properties to preserve
 
@@ -88,6 +91,10 @@ plane. mTLS between compilers and primary comes free off the existing Puppet CA.
 
 Git or OCI. OCI is the most modern fit given where Vox Pupuli already invests.
 
+**v1 is tarball over HTTPS** — the shortest path to a working end-to-end system
+that integration tests can exercise. Git or OCI is the v2 direction, not yet
+built.
+
 ## Repo and packaging
 
 **Own repo, not inside openvox-server.** The hook is already shipped and
@@ -104,14 +111,19 @@ landing on every compiler.
 Single Go binary, subcommands:
 
 ```text
-codavox publish       # primary: run r10k, seal, serve version + artifacts
+codavox deploy        # primary: run r10k, seal, trigger a reseal
+codavox deploy-server # primary: deploy API and control-repo webhook
+codavox publish       # primary: seal a staging dir, serve versions + artifacts
 codavox agent         # compiler: poll, fetch, unpack, symlink-swap, reap
 codavox code-id       # per-compile — must be ~1ms
 codavox code-content  # per static_file_content request
 ```
 
-Plus a **separate Forge module** (`voxpupuli/codavox`) to configure it, per
-Vox Pupuli convention.
+r10k stays r10k's job: `deploy` runs it and codavox distributes the result, so
+`publish` only ever observes a staging dir it does not manage.
+
+A **separate Forge module** (`voxpupuli/codavox`) to configure it, per Vox
+Pupuli convention, is still planned.
 
 **Repo layout and packaging layout are independent decisions.** Own repo does
 not preclude shipping the binary in the openvox-server package or container
@@ -120,22 +132,26 @@ do not pay for it in source coupling.
 
 ## Known hard parts
 
-- **Reaping vs in-flight agents.** Cannot delete a code_id something may still
-  request via code-content. TTL plus refcounting.
+- **Reaping vs in-flight agents.** *Solved:* the agent keeps a version while it
+  is current, among the most recent *keep*, or younger than *min-age*, so a
+  code_id an in-flight run still requests via code-content is never deleted.
+- **Environment deletion** propagating correctly to compilers. *Still open* — a
+  branch removed from the control repo is not yet reaped from compilers.
 - **puppetserver's environment cache** interacting with symlink swaps.
-- **Environment deletion** propagating correctly to compilers.
-- **Poller robustness** — the boring work that determines whether this is
-  trustworthy.
+- **Poller robustness** — *addressed:* a poll failure is logged and retried on
+  the next tick rather than being fatal, so a publisher outage degrades to "no
+  new deploys" rather than "no catalogs."
 
 ## Open questions
 
-- Survey whether anyone in the community has already built something similar.
-  Not investigated.
+- Whether the agent should reuse r10k's Puppetfile resolution or treat the
+  staged tree as fully opaque. *Resolved: opaque.* The deploy runs r10k centrally
+  and codavox distributes the result; the agent never resolves anything.
 - Does openbolt bundle a compiled rugged? If so Vox Pupuli already has a
   cross-platform libgit2 build recipe in-house, which de-risks packaging
   rugged for r10k considerably. **Highest-value unknown.**
-- Whether the agent should reuse r10k's Puppetfile resolution or treat the
-  staged tree as fully opaque. (Leaning opaque.)
+- Survey whether anyone in the community has already built something similar.
+  Not investigated.
 
 ## Name
 
