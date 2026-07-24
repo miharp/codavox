@@ -26,17 +26,8 @@ docker compose -f ~/projects/ovadm/docker-compose.yml \
   -f test/integration/compose.codavox.yml up -d --build
 ```
 
-The Rocky 9 base image currently ships **Java 25**, which OpenVox does not
-support — `ovadm::install` refuses with `java 25.0.3 found but OpenVox requires
-17 or 21`. Install Java 21 on the server and both compilers first:
-
-```console
-for c in ovadm-server ovadm-compiler01 ovadm-compiler02; do
-  docker exec $c dnf install -y -q java-21-openjdk-headless
-done
-```
-
-Then install OpenVox Server and enroll both compilers:
+Then install OpenVox Server and enroll both compilers. ovadm's image bakes in a
+supported Java, so there is no separate Java step:
 
 ```console
 cd ~/projects/ovadm
@@ -49,28 +40,29 @@ bolt plan run ovadm::add_compiler server_host=puppet \
 
 ## Install and wire codavox
 
+`ovadm::codavox` does the whole setup — installs the package on the server and
+compilers, writes each node's config, serves a seeded environment, converges the
+agents, then wires OpenVox Server, in the safe order (converge before wiring).
+
+Build a snapshot of the current checkout and hand it to the plan with
+`package_url`, so the run tests your code rather than a release:
+
 ```console
 goreleaser release --snapshot --clean --skip=publish
 RPM=$(ls dist/*linux_arm64.rpm)
 for c in ovadm-server ovadm-compiler01 ovadm-compiler02; do
-  docker cp "$RPM" $c:/tmp/codavox.rpm
-  docker exec $c dnf install -y -q /tmp/codavox.rpm
+  docker cp "$RPM" "$c:/tmp/codavox.rpm"
 done
+
+cd ~/projects/ovadm
+bolt plan run ovadm::codavox server_host=puppet \
+  compiler_hosts=compiler01,compiler02 \
+  package_url=/tmp/codavox.rpm \
+  --inventoryfile ~/projects/codavox/test/integration/inventory.yaml
 ```
 
-On each compiler:
-
-```console
-cat > /etc/puppetlabs/puppetserver/conf.d/versioned-code.conf <<'EOF'
-versioned-code: {
-    code-id-command: /usr/bin/codavox-code-id
-    code-content-command: /usr/bin/codavox-code-content
-}
-EOF
-puppet config set --section main environmentpath /opt/puppetlabs/codavox/environments
-puppet config set --section server static_catalogs true
-systemctl restart puppetserver
-```
+To install the published package instead of a snapshot, drop `package_url` and
+pass `codavox_version=<release>`.
 
 ## What this exercised
 
