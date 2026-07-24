@@ -195,12 +195,19 @@ throws at startup if exactly one is present:
 > "versioned-code.code-content-command" was set. Both or neither must be set
 > for the versioned-code-service to function correctly.
 
-Static catalogs also need enabling in `puppet.conf`:
+Static catalogs must be on for versioned content to take effect. The
+`static_catalogs` setting defaults to `true`, so this is usually already the
+case; set it explicitly only if it was turned off:
 
 ```ini
 [server]
 static_catalogs = true
 ```
+
+Note that OpenVox Server asks for a `code_id` on every catalog compile
+regardless — but with no `code-id-command` configured, it gets nothing back and
+the versioning is inert. Wiring the two commands above is what makes static
+catalogs actually do their job.
 
 See [versioned-code-contract.md](versioned-code-contract.md) for the full
 verified interface.
