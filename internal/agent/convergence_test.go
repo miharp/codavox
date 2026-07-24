@@ -59,13 +59,22 @@ func newCompiler(t *testing.T, ca *testca.CA, name string) compiler {
 // syncOnce runs the real agent binary once against the publisher.
 func (c compiler) syncOnce(t *testing.T, bin, publisher string) error {
 	t.Helper()
-	cmd := exec.Command(bin, "agent",
+	return c.syncOnceArgs(t, bin, publisher)
+}
+
+// syncOnceArgs is syncOnce with extra agent flags appended, so a test can pin
+// --keep or --min-age to exercise reaping.
+func (c compiler) syncOnceArgs(t *testing.T, bin, publisher string, extra ...string) error {
+	t.Helper()
+	args := []string{"agent",
 		"--publisher", publisher,
 		"--once",
 		"--certname", c.name,
 		"--ssldir", c.ssldir,
 		"--environmentpath", c.envPath,
-	)
+	}
+	args = append(args, extra...)
+	cmd := exec.Command(bin, args...)
 	cmd.Env = append(os.Environ(), "CODAVOX_ROOT="+c.root)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
