@@ -1,0 +1,37 @@
+---
+# Self-contained end-to-end integration test: stands up a real two-node OpenVox
+# topology (primary CA + publisher, compiler wired to codavox), provisions it
+# with plain shell — no ovadm — and exercises every feature against real
+# puppetserver processes.
+#
+# Not gated on pull requests: it installs openvox-server and boots two JVMs, too
+# heavy for every PR. Runs on push to main and on demand.
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: End-to-end (self-contained, no ovadm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # install-only: run.sh invokes goreleaser itself to build the HEAD package.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+
+      - name: Run the end-to-end harness
+        run: ./test/integration/run.sh

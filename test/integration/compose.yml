@@ -1,0 +1,42 @@
+---
+# Self-contained two-node topology for codavox's integration harness. No ovadm:
+# run.sh provisions both nodes with plain shell, the way a hand-installer would.
+#
+#   ./test/integration/run.sh
+#
+# primary  acts as the Puppet CA and runs the codavox publisher + deploy server.
+# compiler runs a real OpenVox Server wired to codavox, plus the codavox agent,
+# and doubles as its own puppet agent for the static-catalog assertion.
+name: codavox-integration
+
+services:
+  primary:
+    build: .
+    container_name: codavox-primary
+    hostname: primary
+    privileged: true          # systemd (puppetserver, codavox units) as PID 1
+    networks:
+      - codavox
+    volumes:
+      - codavox-primary:/opt/puppetlabs/codavox
+
+  compiler:
+    build: .
+    container_name: codavox-compiler
+    hostname: compiler
+    privileged: true
+    networks:
+      - codavox
+    volumes:
+      # Version directories live on a named volume, not the container overlay:
+      # atomic symlink swap is a core correctness claim, and rename(2) semantics
+      # on overlayfs would make the test either flaky or falsely reassuring.
+      - codavox-compiler:/opt/puppetlabs/codavox
+
+networks:
+  codavox:
+    driver: bridge
+
+volumes:
+  codavox-primary:
+  codavox-compiler:
