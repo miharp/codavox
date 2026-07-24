@@ -21,7 +21,7 @@ URL. Both package managers resolve dependencies and support clean removal when
 installing from a file.
 
 ```console
-dnf install https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_aarch64.rpm
+dnf install https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_arm64.rpm
 ```
 
 ```console
@@ -64,8 +64,9 @@ codavox version
 codavox-code-id production
 ```
 
-Before any code is deployed, `codavox-code-id` exits non-zero because no state
-file exists. That is correct: codavox never invents a `code_id`.
+Before any code is deployed, `codavox-code-id` exits non-zero because the
+environment link does not exist yet. That is correct: codavox never invents a
+`code_id`.
 
 ## Upgrading and removing
 
