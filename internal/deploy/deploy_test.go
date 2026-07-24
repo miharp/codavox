@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/miharp/codavox/internal/publish"
 	"github.com/miharp/codavox/internal/seal"
@@ -145,5 +147,67 @@ func TestSignalPublisherRejectsMissingAndStalePidfiles(t *testing.T) {
 func TestResolveR10kExplicitMissing(t *testing.T) {
 	if _, err := resolveR10k(filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Error("expected error for an explicit r10k path that does not exist")
+	}
+}
+
+// writeSerializingR10k writes a fake r10k that fails if a second copy runs while
+// it is still working, by guarding a marker file. Two deploys that overlap on
+// staging both exec this; if the lock does its job, they never overlap.
+func writeSerializingR10k(t *testing.T, staging, markerDir string) string {
+	t.Helper()
+	script := fmt.Sprintf(`#!/bin/sh
+marker=%q/deploying
+if [ -e "$marker" ]; then echo OVERLAP >&2; exit 1; fi
+: > "$marker"
+mkdir -p %q
+printf 'node default { }\n' > %q
+printf '{"name":"production","signature":"x"}' > %q
+sleep 0.4
+rm -f "$marker"
+`,
+		markerDir,
+		filepath.Join(staging, "production", "manifests"),
+		filepath.Join(staging, "production", "manifests", "site.pp"),
+		filepath.Join(staging, "production", ".r10k-deploy.json"))
+
+	path := filepath.Join(t.TempDir(), "r10k")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestConcurrentDeploysSerialize is the reason for the staging lock: two
+// deploys sharing a staging directory must not run r10k at the same time, or
+// they corrupt each other's trees. Both share one state directory, hence one
+// lock; the fake r10k fails if it ever sees an overlap.
+func TestConcurrentDeploysSerialize(t *testing.T) {
+	staging := t.TempDir()
+	state := t.TempDir()
+	marker := t.TempDir()
+	r10k := writeSerializingR10k(t, staging, marker)
+
+	cfg := Config{
+		R10kPath:    r10k,
+		StagingDir:  staging,
+		StateDir:    state,
+		LockTimeout: 30 * time.Second,
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = Run(cfg, []string{"production"}, false, false)
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("deploy %d failed (overlap not prevented?): %v", i, err)
+		}
 	}
 }

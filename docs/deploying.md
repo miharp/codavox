@@ -75,6 +75,15 @@ The same signal an operator or r10k `postrun` hook sends (see
 codavox deploy and a plain r10k-plus-`postrun` deploy converge to the same
 state.
 
+## Concurrent deploys
+
+Every deploy — from the command, the webhook, or a script — takes an exclusive
+lock (`<state>/deploy.lock`) around r10k, because r10k rewrites the staging
+directory in place and two overlapping runs would corrupt each other's trees. A
+second deploy waits for the first to finish rather than racing it. The lock is
+advisory and released if the holder exits, so a crashed deploy does not wedge
+it.
+
 ## Wiring it up
 
 `deploy` is the deploy path other front doors will reuse. A webhook receiver and
