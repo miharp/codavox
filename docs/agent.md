@@ -26,6 +26,7 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 | `--environmentpath` | `/opt/puppetlabs/codavox/environments` | Where environment links live |
 | `--keep` | `3` | Superseded versions retained per environment |
 | `--min-age` | `2h` | Minimum retention regardless of `--keep` |
+| `--prune-environments` | off | Remove environments the publisher no longer serves |
 
 ## What a reconciliation does
 
@@ -113,6 +114,29 @@ deleting that tree turns a successful run into a failed one. `--min-age` should
 comfortably exceed your longest agent run.
 
 The current version is never reaped, regardless of age or count.
+
+## Pruning deleted environments
+
+By default the agent adds and updates environments but never deletes one — a
+removed environment simply stops being updated, and its symlink and versions
+linger. With `--prune-environments`, the agent also removes an environment the
+publisher no longer serves: it deletes the environment symlink immediately, so
+new compiles fail loudly, and reaps that environment's versions by `--min-age`
+so an in-flight run's file content still resolves until the age passes.
+
+Deletion is destructive, so it is guarded:
+
+- **Only after a successful poll.** A publisher that is unreachable is never read
+  as "every environment was deleted"; a failed poll prunes nothing.
+- **Never on an empty advertisement.** If the publisher serves *zero*
+  environments — far more likely a misconfiguration or an empty staging
+  directory than a real mass deletion — the agent prunes nothing and logs a
+  warning. Deleting the last environment stays a manual action.
+
+For a deletion to reach here at all, r10k must be configured to purge removed
+environments from staging (`purge_levels` in `r10k.yaml`); otherwise the deleted
+branch never leaves the publisher's staging directory. See
+[deploying.md](deploying.md#deleting-environments).
 
 ## Failure handling
 

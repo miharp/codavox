@@ -51,10 +51,11 @@ type Config struct {
 	} `yaml:"deploy_server"`
 
 	Agent struct {
-		Publisher string `yaml:"publisher"`
-		Interval  string `yaml:"interval"`
-		Keep      int    `yaml:"keep"`
-		MinAge    string `yaml:"min_age"`
+		Publisher         string `yaml:"publisher"`
+		Interval          string `yaml:"interval"`
+		Keep              int    `yaml:"keep"`
+		MinAge            string `yaml:"min_age"`
+		PruneEnvironments bool   `yaml:"prune_environments"`
 	} `yaml:"agent"`
 }
 

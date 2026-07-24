@@ -31,3 +31,6 @@ agent:
   interval:  30s
   keep:      3
   min_age:   2h
+  # Remove environments the publisher no longer serves. Off by default;
+  # deletion is destructive, so opt in. Needs r10k purge_levels set too.
+  prune_environments: false
