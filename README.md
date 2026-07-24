@@ -1,130 +1,204 @@
 # codavox
 
-Versioned code distribution for OpenVox compilers, built on puppetserver's
-open-source `versioned-code-service` hook.
+**Versioned Puppet code distribution for OpenVox — the open-source answer to
+Puppet Enterprise's Code Manager and file sync.**
 
-> A *coda* is the passage that brings every performance to the same close.
+codavox gets your Puppet code onto OpenVox compilers and lets every compiler
+report exactly which version it is serving. You deploy from your control repo
+the way you already do; codavox makes sure every compiler ends up serving
+identical, fully resolved code — and can prove which version that is.
 
-**Status: early development.** The full chain works and has been run against
-real OpenVox Server processes: `codavox deploy` runs r10k and seals, two
-compilers converge over mutual TLS, a compiler catches up after missing a
-deploy, and an agent receives a static catalog stamped with the codavox
-`code_id`. See [test/integration](test/integration/) and the
-[implementation plan](docs/implementation-plan.md).
+**Status: early development.** The whole chain works and has run against real
+OpenVox Server: a deploy runs r10k and distributes the result, two compilers
+converge, a compiler that missed a deploy catches up on its own, and an agent
+receives a catalog stamped with the exact code version. It has not yet been
+packaged for production use.
 
-If you are coming from Puppet Enterprise, codavox is the missing Code Manager
-piece for OpenVox: `codavox deploy production` is the same verb as
-`puppet-code deploy production`, on the same staging-to-compilers model.
+## Coming from Puppet Enterprise?
 
-## Why
+If you have run Code Manager, you already know the model. codavox is the same
+shape for open-source OpenVox Server — which ships the hook file sync relies on,
+but not file sync or Code Manager themselves.
 
-Getting Puppet code onto compilers currently means webhooks (push,
-fire-and-forget, so a compiler that was down misses the event permanently),
-NFS (a single point of failure for catalog compilation itself, with no
-atomicity), or rsync (not atomic, not versioned, no notion of which version is
-live).
+| In Puppet Enterprise | In codavox |
+|---|---|
+| `puppet-code deploy production` | `codavox deploy production` |
+| Code Manager webhook and API | `codavox deploy-server` (push webhook + `POST /v1/deploys`) |
+| file sync, primary → compilers | `codavox publish` on the primary, `codavox agent` on each compiler |
+| static catalogs and their `code_id` | the same — codavox implements the same contract |
+| Code Manager runs r10k centrally | codavox runs r10k too, then distributes the result |
 
-All three distribute *code*. None distributes *identity* — nothing in those
-systems can answer "which exact version is this compiler serving?", so
-divergence cannot even be detected, let alone corrected.
+The main difference: compilers **pull** (poll) rather than being pushed to, so a
+compiler that was offline during a deploy catches up on its own — no event to
+replay, no way to silently miss one.
 
-codavox distributes resolved code artifacts addressed by a `code_id`. Compilers
-converge on their own, and agents get file content consistent with the catalog
-they were served, even if code changes mid-run.
+## A few terms
+
+- **Environment** — a named set of Puppet code, such as `production`, built from
+  a branch of your control repo. As everywhere in Puppet.
+- **Static catalog** — a catalog that records the exact code version and file
+  checksums, so an agent applies one consistent snapshot even if the code
+  changes mid-run. Making these reliable is codavox's whole job. (A Puppet
+  feature; OpenVox Server ships the interface for it.)
+- **`code_id`** — the identifier for that exact version. In codavox it is a
+  content hash of the fully resolved code, so identical code always has the same
+  `code_id`, on every compiler.
+- **Publisher and agent** — the publisher runs on your primary and serves
+  versioned code; the agent runs on each compiler and pulls it.
+
+## How a deploy flows
+
+```mermaid
+flowchart LR
+    repo[(Control repo)]
+
+    subgraph primary [Primary]
+        direction TB
+        trig["deploy / deploy-server<br/>CLI · webhook · API"]
+        r10k[r10k]
+        pub["publish<br/>content-hash → artifact"]
+        trig -->|runs once| r10k
+        r10k -->|resolved tree| pub
+    end
+
+    subgraph compiler [Each compiler]
+        direction TB
+        agent["agent<br/>poll · verify · atomic swap"]
+        served[("versioned code")]
+        ovs["OpenVox Server"]
+        agent --> served
+        ovs <-->|"code-id · code-content"| served
+    end
+
+    repo -->|"push · deploy · CI"| trig
+    pub -->|"pull artifact, mutual TLS"| agent
+```
+
+1. You run `codavox deploy production` — or push to your control repo, or call
+   the deploy API.
+2. codavox runs **r10k** once to resolve the code into a staging directory,
+   exactly as you do today. codavox does not replace r10k; it distributes what
+   r10k produces.
+3. It content-hashes that resolved tree into a `code_id` and packages it as an
+   immutable artifact.
+4. Each compiler's agent polls, downloads the new artifact, verifies it against
+   the `code_id`, and atomically switches to it.
+5. On every catalog compile, OpenVox Server asks `codavox code-id production`
+   and gets the exact version that compiler is serving — one instant lookup.
+
+Because "which version?" is a content hash every compiler computes the same way,
+divergence between compilers becomes visible and self-correcting instead of a
+silent bug.
+
+## Install
+
+Download the package for your architecture from the
+[releases page](https://github.com/miharp/codavox/releases) and install it by URL:
+
+```console
+# RPM — Rocky, RHEL, AlmaLinux, CentOS Stream
+dnf install https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_arm64.rpm
+```
+
+```console
+# DEB — Debian, Ubuntu
+curl -fsSLO https://github.com/miharp/codavox/releases/download/v0.1.0/codavox_0.1.0_linux_arm64.deb
+apt-get install -y ./codavox_0.1.0_linux_arm64.deb
+```
+
+Pick `arm64` or `amd64` to match the host — OpenVox on Apple silicon is `arm64`.
+The package installs `/usr/bin/codavox` and the symlinks OpenVox Server invokes;
+see [installation.md](docs/installation.md). To build from source instead, see
+[Development](#development).
 
 ## Quickstart
 
-On the primary, serve staged code and deploy it — the deploy verb is the one
-you already know from `puppet-code`:
+Put the `codavox` binary on your primary and each compiler. Then, on the
+primary, run the publisher and deploy — the deploy command is the one you know
+from `puppet-code`:
 
 ```console
-# run the publisher (as a service), pointed at r10k's basedir
+# publisher (run as a service), pointed at r10k's basedir
 $ codavox publish --staging /etc/puppetlabs/code-staging
 
-# deploy: runs r10k, seals, and serves — blocking until it is live
+# deploy: runs r10k, packages the result, and serves it — waiting until it is live
 $ codavox deploy production --wait --staging /etc/puppetlabs/code-staging
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
 ```
 
-On each compiler, run the agent and point OpenVox Server at codavox's commands:
+On each compiler, run the agent and point OpenVox Server at codavox:
 
 ```console
-# converge this compiler onto whatever the publisher serves (as a service)
+# converge this compiler onto whatever the publisher serves (run as a service)
 $ codavox agent --publisher https://puppet.example.com:8150
 
-# OpenVox Server then answers "which version am I serving?" in one symlink read
+# what version is this compiler serving right now?
 $ codavox code-id production
 a3f1c9e4b2d8
 ```
 
-For a control loop, run `codavox deploy-server` on the primary: a
-token-authenticated deploy API (`POST /v1/deploys`, with status and history) and
-a push webhook, so CI drives deploys and a control-repo push deploys the matching
-environment — the way Code Manager's API and webhook do.
+For push-to-deploy and CI, run `codavox deploy-server` on the primary: a push
+webhook and a token-authenticated deploy API with status and history, the way
+Code Manager's webhook and API work. Settings shared across these commands —
+staging directory, SSL paths, r10k — go in one [config file](docs/configuration.md).
 
-Compilers **poll**, so one that was down catches up on its own. See
-[deploying.md](docs/deploying.md), [deploy-server.md](docs/deploy-server.md),
-[publishing.md](docs/publishing.md), and [agent.md](docs/agent.md).
+## What it guarantees
 
-## Quick look
+- **It never serves the wrong version.** Ask a compiler for a version it does
+  not have and it fails loudly, rather than quietly serving whatever is current
+  — the exact failure static catalogs exist to prevent:
 
-```console
-$ codavox code-id production
-a3f1c9e4b2d8
+  ```console
+  $ codavox code-content production notdeployed manifests/site.pp
+  codavox: code version not deployed: notdeployed
+  $ echo $?
+  1
+  ```
 
-$ codavox code-content production a3f1c9e4b2d8 manifests/site.pp
-node default { }
+- **Compilers converge on their own.** Polling means a compiler that missed a
+  deploy catches up on its next tick — no replayed event, no split brain.
+- **Deploys are atomic.** A compiler serves the old version or the new one,
+  never a half-written tree.
 
-$ codavox code-content production notdeployed manifests/site.pp
-codavox: code version not deployed: notdeployed at /opt/puppetlabs/codavox/versions/production_notdeployed
-$ echo $?
-1
-```
+## Why not webhooks, NFS, or rsync?
 
-That last case is the point. A version that is not deployed is an **error**,
-never a silent fall back to whatever is current.
+The usual ways to get code onto compilers each give something up: webhooks are
+fire-and-forget, so a compiler that was down misses the deploy for good; NFS
+makes catalog compilation itself depend on one fileserver, with no atomicity;
+rsync is neither atomic nor versioned. And none of them can answer "which exact
+version is this compiler serving?", so divergence cannot even be detected.
+codavox distributes versioned, content-addressed code and answers that question
+by design. See [design.md](docs/design.md) for the full rationale.
 
 ## Documentation
 
 | document | contents |
 |---|---|
 | [configuration.md](docs/configuration.md) | The shared config file: location, precedence, and every setting |
-| [deploying.md](docs/deploying.md) | Running `codavox deploy`, r10k invocation, the reseal trigger, `--wait` |
+| [deploying.md](docs/deploying.md) | `codavox deploy`: r10k, the reseal trigger, `--wait` |
 | [deploy-server.md](docs/deploy-server.md) | The deploy API and push webhook; deploy status and history |
-| [agent.md](docs/agent.md) | Running the compiler-side agent, verification, atomic swap, reaping |
-| [publishing.md](docs/publishing.md) | Running the publisher, mutual TLS, and the role constraint |
-| [sealing.md](docs/sealing.md) | How a code_id is derived, what is excluded, and why |
-| [commands.md](docs/commands.md) | Command reference, exit codes, puppetserver wiring, on-disk layout |
-| [design.md](docs/design.md) | Architecture, transport options, repo layout, known hard parts |
-| [performance.md](docs/performance.md) | Per-deploy benchmarks, the acceptance timing harness, and how to read them |
-| [implementation-plan.md](docs/implementation-plan.md) | Phased build order, test topology, integration tests |
-| [versioned-code-contract.md](docs/versioned-code-contract.md) | The verified puppetserver interface and its validation rules |
+| [publishing.md](docs/publishing.md) | Running the publisher and its mutual TLS |
+| [agent.md](docs/agent.md) | The compiler-side agent: verification, atomic swap, cleanup |
+| [sealing.md](docs/sealing.md) | How a `code_id` is derived from a tree, and what is excluded |
+| [commands.md](docs/commands.md) | Command reference, exit codes, and OpenVox Server wiring |
+| [performance.md](docs/performance.md) | Per-deploy benchmarks and the acceptance timing harness |
+| [design.md](docs/design.md) | Architecture, trade-offs, and known hard parts |
+| [versioned-code-contract.md](docs/versioned-code-contract.md) | The verified OpenVox Server interface codavox implements |
 
-## Design constraints worth knowing
-
-- **`code-id` runs on every static catalog compile, uncached.** OpenVox Server
-  spawns it fresh each time. Measured against a Ruby-based equivalent:
-  **83 ms → 3.2 ms per invocation**, of which almost all the remainder is
-  process spawn (the work itself is ~14 µs). This is why the compiler-side
-  components are a compiled binary rather than a script.
-- **No fallbacks.** A missing state file or undeployed `code_id` fails loudly.
-  Serving plausible-but-wrong content while exiting `0` is the failure mode
-  static catalogs exist to prevent.
-- **`code_id` accepts only `[a-zA-Z0-9_\-:;]`** — no `/`, `.`, `+` or `=`. Use
-  hex digests; base64 will be rejected by OpenVox Server at runtime.
-- **r10k is not deterministic across time.** A Puppetfile with `:latest` or a
-  branch ref resolves differently later, so per-compiler resolution can never
-  converge. codavox distributes resolved trees, never Puppetfiles.
-
-## Building
+## Development
 
 ```console
-go build ./cmd/codavox
-go test ./...
+go build ./cmd/codavox     # build
+go test ./...              # test
 ```
 
-Requires Go 1.26. `linux/amd64` and `linux/arm64` are both first-class targets.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checks CI runs.
 
 ## License
 
 [Apache-2.0](LICENSE)
+
+---
+
+*A* coda *is the passage that brings every performance to the same close — which
+is the job: get exactly the same code onto every compiler.*
