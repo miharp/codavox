@@ -35,7 +35,7 @@ func sealWithProvenance(t *testing.T, staging, logPath string) (*Store, *Log) {
 	if err != nil {
 		t.Fatalf("OpenLog: %v", err)
 	}
-	s := NewStore(staging)
+	s := NewStore(staging, t.TempDir())
 	s.EnableProvenance(log)
 	if err := s.Reseal(); err != nil {
 		t.Fatalf("Reseal: %v", err)
@@ -68,7 +68,7 @@ func TestProvenanceCapturesCommit(t *testing.T) {
 
 	// The excluded deploy file must not have leaked into the code_id: an
 	// environment sealed without provenance capture gets the same id.
-	bare := NewStore(staging)
+	bare := NewStore(staging, t.TempDir())
 	if err := bare.Reseal(); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestProvenanceDeduplicates(t *testing.T) {
 
 	// Reseal the identical tree twice more; the (code_id, commit) pair is
 	// already known, so no duplicate rows accumulate.
-	s := NewStore(staging)
+	s := NewStore(staging, t.TempDir())
 	s.EnableProvenance(log)
 	if err := s.Reseal(); err != nil {
 		t.Fatal(err)
@@ -173,7 +173,7 @@ func TestProvenanceOneCodeIDManyCommits(t *testing.T) {
 		staging := stageWithDeploy(t, "production",
 			map[string]string{"manifests/site.pp": "unchanged\n"},
 			`{"name":"production","signature":"`+commit+`"}`)
-		s := NewStore(staging)
+		s := NewStore(staging, t.TempDir())
 		s.EnableProvenance(log)
 		if err := s.Reseal(); err != nil {
 			t.Fatal(err)

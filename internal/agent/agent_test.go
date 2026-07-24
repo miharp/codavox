@@ -29,7 +29,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 
 	staging := t.TempDir()
-	store := publish.NewStore(staging)
+	store := publish.NewStore(staging, t.TempDir())
 	server := httptest.NewServer(publish.Handler(store))
 	t.Cleanup(server.Close)
 

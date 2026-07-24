@@ -2,9 +2,12 @@
 package publish
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,40 +19,67 @@ import (
 	"github.com/miharp/codavox/internal/seal"
 )
 
+// sealedEnv is a published environment: its code_id and the materialized
+// artifact that reproduces it.
+type sealedEnv struct {
+	codeID   string
+	artifact string // path to the deterministic .tar.gz
+}
+
 // Store holds sealed environments and the artifacts that reproduce them.
 type Store struct {
 	// StagingDir contains one directory per environment, as r10k deploys it.
 	StagingDir string
+	// ArtifactDir holds the materialized .tar.gz for each current version.
+	// Serving reads from here, never from StagingDir, so a compiler can never
+	// observe a half-written tree from an r10k deploy that is still in progress.
+	ArtifactDir string
 
 	mu     sync.RWMutex
-	sealed map[string]string // environment -> code_id
+	sealed map[string]sealedEnv // environment -> {code_id, artifact}
 
 	// prov, when set, records where each sealed tree came from. It is optional
 	// because it is diagnostic: a Store with no log still seals and serves.
 	prov *Log
 }
 
-// NewStore returns a Store reading environments from stagingDir.
-func NewStore(stagingDir string) *Store {
-	return &Store{StagingDir: stagingDir, sealed: map[string]string{}}
+// NewStore returns a Store reading environments from stagingDir and writing
+// materialized artifacts under artifactDir.
+func NewStore(stagingDir, artifactDir string) *Store {
+	return &Store{StagingDir: stagingDir, ArtifactDir: artifactDir, sealed: map[string]sealedEnv{}}
 }
 
 // EnableProvenance makes Reseal capture control-repo provenance into log.
 func (s *Store) EnableProvenance(log *Log) { s.prov = log }
 
-// Reseal rescans the staging directory and updates the published code_ids.
+// Reseal rescans the staging directory, updates the published code_ids, and
+// materializes an immutable artifact for each current version.
 //
 // Sealing is not done per request. It walks and hashes an entire environment,
-// which is far too expensive to repeat for every polling compiler, and it
-// would also mean two compilers polling either side of an r10k run could
-// observe different ids for what is meant to be one deploy.
+// far too expensive to repeat for every polling compiler, and two compilers
+// polling either side of an r10k run could otherwise observe different ids for
+// what is meant to be one deploy.
+//
+// Materializing the artifact here — rather than tarring the staging directory
+// when a compiler asks for it — is what makes serving safe while r10k is
+// deploying. The bytes a compiler downloads are a snapshot taken when Reseal
+// ran, not whatever the staging directory happens to hold at request time, so a
+// deploy in progress can never be streamed as a corrupt, half-written artifact.
 func (s *Store) Reseal() error {
+	if s.ArtifactDir == "" {
+		return fmt.Errorf("store has no artifact directory")
+	}
+
 	entries, err := os.ReadDir(s.StagingDir)
 	if err != nil {
 		return fmt.Errorf("reading staging directory: %w", err)
 	}
 
-	next := map[string]string{}
+	s.mu.RLock()
+	prev := s.sealed
+	s.mu.RUnlock()
+
+	next := map[string]sealedEnv{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -65,7 +95,16 @@ func (s *Store) Reseal() error {
 		if err != nil {
 			return fmt.Errorf("sealing %s: %w", env, err)
 		}
-		next[env] = id
+
+		artifact := filepath.Join(s.ArtifactDir, layout.VersionDirName(env, id)+".tar.gz")
+		// Reuse the artifact when content is unchanged; only re-materialize on a
+		// new code_id, or if the file went missing since the last reseal.
+		if prev[env].codeID != id || !fileExists(artifact) {
+			if err := materializeArtifact(artifact, envDir); err != nil {
+				return fmt.Errorf("materializing artifact for %s: %w", env, err)
+			}
+		}
+		next[env] = sealedEnv{codeID: id, artifact: artifact}
 
 		// Provenance is best-effort and must never fail a reseal: a deploy does
 		// not depend on knowing which commit produced it. A missing or malformed
@@ -84,9 +123,67 @@ func (s *Store) Reseal() error {
 	}
 
 	s.mu.Lock()
+	old := s.sealed
 	s.sealed = next
 	s.mu.Unlock()
+
+	reapArtifacts(old, next)
 	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// materializeArtifact writes srcDir as a deterministic gzipped tar at dst.
+//
+// It writes a temporary file in the same directory and renames it into place,
+// so rename(2) publishes the artifact atomically: a reader never sees a
+// partially written one.
+func materializeArtifact(dst, srcDir string) error {
+	// 0700: the artifact directory is publisher-only. The publisher reads these
+	// files to stream them; nothing else needs them.
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("creating artifact directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// Removing tmp is a no-op once it has been renamed away.
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if err := seal.WriteArchive(tmp, srcDir); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		return fmt.Errorf("installing artifact: %w", err)
+	}
+	return nil
+}
+
+// reapArtifacts removes materialized artifacts that are no longer current.
+//
+// Only the current version of each environment is servable, so a superseded
+// artifact is dead weight. An in-flight download holds an open descriptor, so
+// unlinking the file it is streaming is safe on Unix: the bytes stay readable
+// until the handle closes.
+func reapArtifacts(old, next map[string]sealedEnv) {
+	keep := make(map[string]bool, len(next))
+	for _, v := range next {
+		keep[v.artifact] = true
+	}
+	for _, v := range old {
+		if v.artifact != "" && !keep[v.artifact] {
+			_ = os.Remove(v.artifact)
+		}
+	}
 }
 
 // Environments returns the currently published environment to code_id map.
@@ -96,7 +193,7 @@ func (s *Store) Environments() map[string]string {
 
 	out := make(map[string]string, len(s.sealed))
 	for k, v := range s.sealed {
-		out[k] = v
+		out[k] = v.codeID
 	}
 	return out
 }
@@ -105,8 +202,23 @@ func (s *Store) Environments() map[string]string {
 func (s *Store) CodeID(env string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	id, ok := s.sealed[env]
-	return id, ok
+	v, ok := s.sealed[env]
+	return v.codeID, ok
+}
+
+// Artifact returns the materialized artifact path for a current (env, code_id).
+//
+// A stale or unknown pair returns ok=false. Only the current version is
+// servable, because it is the only artifact kept on disk; compilers retain old
+// versions themselves, which is what in-flight agent runs actually need.
+func (s *Store) Artifact(env, codeID string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := s.sealed[env]
+	if !ok || v.codeID != codeID || v.artifact == "" {
+		return "", false
+	}
+	return v.artifact, true
 }
 
 // Handler routes the publisher's HTTP API.
@@ -144,35 +256,34 @@ func (s *Store) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current, ok := s.CodeID(env)
+	path, ok := s.Artifact(env, codeID)
 	if !ok {
-		http.Error(w, fmt.Sprintf("unknown environment %q", env), http.StatusNotFound)
-		return
-	}
-
-	// Only the current version is servable. Serving an arbitrary historical
-	// id would mean re-sealing to find it, and keeping every past tree on the
-	// publisher; compilers retain old versions themselves for in-flight runs.
-	if codeID != current {
 		http.Error(w,
-			fmt.Sprintf("code_id %s is not current for %s (current is %s)", codeID, env, current),
+			fmt.Sprintf("no current artifact for %s at code_id %s", env, codeID),
 			http.StatusNotFound)
 		return
 	}
+
+	f, err := os.Open(path) // #nosec G304 -- path is a materialized artifact this store wrote
+	if err != nil {
+		// A reseal may have reaped it between the lookup and the open; the
+		// compiler retries on its next poll.
+		http.Error(w, "artifact no longer available", http.StatusNotFound)
+		return
+	}
+	defer func() { _ = f.Close() }()
 
 	w.Header().Set("Content-Type", "application/gzip")
 	// The body is content-addressed by the code_id in the URL, so it can never
 	// change meaning; anything that caches it may keep it indefinitely.
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Disposition",
-		fmt.Sprintf("attachment; filename=%q", env+"_"+codeID+".tar.gz"))
+		fmt.Sprintf("attachment; filename=%q", layout.VersionDirName(env, codeID)+".tar.gz"))
 
-	// Streamed rather than buffered: environments run to hundreds of megabytes
-	// and several compilers may poll at once.
-	if err := seal.WriteArchive(w, filepath.Join(s.StagingDir, env)); err != nil {
+	if _, err := io.Copy(w, f); err != nil {
 		// Headers are already sent, so the status cannot be corrected. The
-		// truncated body fails the agent's digest check, which is the backstop
-		// that makes a partial transfer safe.
+		// truncated body fails the agent's verify-by-reseal, which is the
+		// backstop that makes a partial transfer safe.
 		return
 	}
 }
@@ -184,12 +295,12 @@ type Server struct {
 	TLSConfig *tls.Config
 }
 
-// ListenAndServeTLS serves until the process exits.
+// Serve runs until ctx is cancelled, then shuts down gracefully.
 //
 // Certificates come from the TLS configuration rather than from files, because
 // codavox reuses the Puppet CA material already on the node instead of holding
 // a PKI of its own.
-func (srv *Server) ListenAndServeTLS() error {
+func (srv *Server) Serve(ctx context.Context) error {
 	s := &http.Server{
 		Addr:      srv.Addr,
 		Handler:   Handler(srv.Store),
@@ -199,7 +310,21 @@ func (srv *Server) ListenAndServeTLS() error {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	return s.ListenAndServeTLS("", "")
+
+	go func() {
+		<-ctx.Done()
+		// Derive from ctx (so it is request-scoped) but strip its cancellation:
+		// ctx is already done, and Shutdown needs a live context to bound the
+		// drain on.
+		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_ = s.Shutdown(shutCtx)
+	}()
+
+	if err := s.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // EnvironmentsPath is the polling endpoint compilers use.

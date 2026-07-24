@@ -303,7 +303,7 @@ func publishServe(args []string) error {
 		return err
 	}
 
-	store := publish.NewStore(opts.staging)
+	store := publish.NewStore(opts.staging, filepath.Join(opts.state, "artifacts"))
 
 	provLog, err := publish.OpenLog(filepath.Join(opts.state, provenanceFile))
 	if err != nil {
@@ -321,8 +321,36 @@ func publishServe(args []string) error {
 	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s)\n",
 		opts.listen, opts.certname, strings.Join(opts.roles, ", "))
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// SIGHUP triggers a reseal. codavox does not own the deploy — it observes a
+	// staging directory r10k controls — so it cannot hook "r10k finished" in
+	// process the way PE's Code Manager does. An operator, or r10k's postrun
+	// hook, sends SIGHUP after a deploy completes. Because the signal fires only
+	// once the deploy has returned, the tree is quiescent and no reseal ever
+	// observes a half-written deploy.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				if err := store.Reseal(); err != nil {
+					fmt.Fprintf(os.Stderr, "reseal failed: %v\n", err)
+					continue
+				}
+				for env, id := range store.Environments() {
+					fmt.Fprintf(os.Stderr, "resealed %s %s\n", env, id)
+				}
+			}
+		}
+	}()
+
 	srv := &publish.Server{Addr: opts.listen, Store: store, TLSConfig: tlsConfig}
-	return srv.ListenAndServeTLS()
+	return srv.Serve(ctx)
 }
 
 // agentRun polls a publisher and converges this node onto it.
