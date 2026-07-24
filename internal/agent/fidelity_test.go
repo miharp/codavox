@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ type publisher struct {
 	staging string
 	addr    string
 	ssldir  string
+	state   string
 	cmd     *exec.Cmd
 }
 
@@ -28,11 +30,15 @@ func (p *publisher) url() string { return "https://" + p.addr }
 func (p *publisher) restart(t *testing.T) {
 	t.Helper()
 	p.stop()
+	if p.state == "" {
+		p.state = t.TempDir()
+	}
 	cmd := exec.Command(p.bin, "publish",
 		"--staging", p.staging,
 		"--listen", p.addr,
 		"--certname", "puppet.example.com",
 		"--ssldir", p.ssldir,
+		"--state", p.state,
 	)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -46,6 +52,17 @@ func (p *publisher) stop() {
 		_ = p.cmd.Process.Kill()
 		_ = p.cmd.Wait()
 		p.cmd = nil
+	}
+}
+
+// hup signals the running publisher to reseal, without restarting it.
+func (p *publisher) hup(t *testing.T) {
+	t.Helper()
+	if p.cmd == nil {
+		t.Fatal("publisher is not running")
+	}
+	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatalf("sending SIGHUP: %v", err)
 	}
 }
 
@@ -88,6 +105,60 @@ func syncReady(t *testing.T, c compiler, bin, publisher string, extra ...string)
 		time.Sleep(150 * time.Millisecond)
 	}
 	t.Fatalf("compiler never synced: %v", err)
+}
+
+// TestSIGHUPTriggersReseal checks the post-deploy trigger. r10k deploys new
+// content into staging and signals the *running* publisher with SIGHUP — no
+// restart — the way an r10k postrun hook would. The publisher must reseal and
+// begin advertising the new code_id, and a compiler must then converge onto it.
+func TestSIGHUPTriggersReseal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary and binds a port")
+	}
+
+	bin := build(t)
+	ca := testca.New(t)
+	staging := t.TempDir()
+	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
+
+	pub := &publisher{bin: bin, staging: staging, addr: "127.0.0.1:18157", ssldir: serverSSL, state: t.TempDir()}
+	t.Cleanup(pub.stop)
+	c := newCompiler(t, ca, "compiler01.example.com")
+
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	pub.restart(t)
+	syncReady(t, c, bin, pub.url())
+	id1, err := c.codeID(t, bin, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// New deploy into the same running publisher, then the postrun signal.
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v2\n"})
+	pub.hup(t)
+
+	// The reseal is asynchronous, so poll: converge and check whether the id
+	// moved. Without the SIGHUP handler the publisher would still advertise id1
+	// forever and this would time out.
+	var id2 string
+	for range 40 {
+		_ = c.syncOnceArgs(t, bin, pub.url())
+		if id2, err = c.codeID(t, bin, "production"); err == nil && id2 != id1 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if id2 == id1 {
+		t.Fatal("publisher did not reseal on SIGHUP; the compiler never saw the new version")
+	}
+
+	body, err := os.ReadFile(filepath.Join(c.envPath, "production", "manifests/site.pp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "v2\n" {
+		t.Errorf("content = %q, want v2 after a SIGHUP reseal", body)
+	}
 }
 
 // TestContentFidelity is the guarantee that separates codavox from the shell

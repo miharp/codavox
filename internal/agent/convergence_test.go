@@ -122,7 +122,8 @@ func TestTwoCompilersConverge(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command(bin, "publish",
 			"--staging", staging, "--listen", addr,
-			"--certname", "puppet.example.com", "--ssldir", serverSSL)
+			"--certname", "puppet.example.com", "--ssldir", serverSSL,
+			"--state", t.TempDir())
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -248,7 +249,8 @@ func TestAgentWithoutCompilerRoleIsRefused(t *testing.T) {
 
 	cmd := exec.Command(bin, "publish",
 		"--staging", staging, "--listen", addr,
-		"--certname", "puppet.example.com", "--ssldir", serverSSL)
+		"--certname", "puppet.example.com", "--ssldir", serverSSL,
+		"--state", t.TempDir())
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

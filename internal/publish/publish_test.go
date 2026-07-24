@@ -30,7 +30,7 @@ func staging(t *testing.T, envs map[string]map[string]string) *Store {
 			}
 		}
 	}
-	s := NewStore(dir)
+	s := NewStore(dir, t.TempDir())
 	if err := s.Reseal(); err != nil {
 		t.Fatalf("Reseal: %v", err)
 	}
@@ -210,6 +210,101 @@ func TestHandlerArtifact(t *testing.T) {
 			}
 		}
 	})
+}
+
+func writeStagingFile(t *testing.T, root, rel, body string) {
+	t.Helper()
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestArtifactIsSnapshotNotLiveStaging is the reason artifacts are materialized
+// at seal time. After sealing, the staging directory is mutated the way an
+// r10k deploy in progress would mutate it, without a reseal. The served
+// artifact must remain the snapshot sealed earlier — same code_id, same bytes —
+// not whatever staging now holds. Serving live staging would stream a
+// half-written tree whose bytes no longer match the advertised code_id.
+func TestArtifactIsSnapshotNotLiveStaging(t *testing.T) {
+	s := staging(t, map[string]map[string]string{
+		"production": {"manifests/site.pp": "v1\n"},
+	})
+	srv := httptest.NewServer(Handler(s))
+	defer srv.Close()
+
+	current := s.Environments()["production"]
+
+	// A deploy starts overwriting staging in place; no reseal has happened yet.
+	writeStagingFile(t, s.StagingDir, "production/manifests/site.pp", "v2-partial\n")
+
+	resp, err := http.Get(srv.URL + ArtifactPath("production", current))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "extracted")
+	if err := seal.ExtractArchive(bytes.NewReader(body), dst); err != nil {
+		t.Fatalf("ExtractArchive: %v", err)
+	}
+	got, err := seal.CodeID(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != current {
+		t.Errorf("artifact sealed to %s, want %s — served live staging, not the snapshot", got, current)
+	}
+	served, err := os.ReadFile(filepath.Join(dst, "manifests", "site.pp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(served) != "v1\n" {
+		t.Errorf("served content = %q, want v1 — the snapshot, not the mid-deploy write", served)
+	}
+}
+
+func TestResealReapsSupersededArtifact(t *testing.T) {
+	dir := t.TempDir()
+	artifacts := t.TempDir()
+	writeStagingFile(t, dir, "production/manifests/site.pp", "v1\n")
+
+	s := NewStore(dir, artifacts)
+	if err := s.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	old := s.Environments()["production"]
+	oldArtifact := filepath.Join(artifacts, "production_"+old+".tar.gz")
+	if !fileExists(oldArtifact) {
+		t.Fatalf("first reseal did not materialize %s", oldArtifact)
+	}
+
+	// New content seals to a new code_id; the superseded artifact is dead weight
+	// and must be reaped, while the new one takes its place.
+	writeStagingFile(t, dir, "production/manifests/site.pp", "v2\n")
+	if err := s.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	newID := s.Environments()["production"]
+	if newID == old {
+		t.Fatal("code_id did not change after content change")
+	}
+	if fileExists(oldArtifact) {
+		t.Error("superseded artifact was not reaped")
+	}
+	if !fileExists(filepath.Join(artifacts, "production_"+newID+".tar.gz")) {
+		t.Error("new artifact was not materialized")
+	}
 }
 
 // The end-to-end check that the whole authorization design rests on: a real

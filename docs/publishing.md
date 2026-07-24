@@ -21,7 +21,7 @@ listening on :8150 as puppet.example.com (roles: openvox_compiler)
 | `--certname` | system hostname | Node's Puppet certname |
 | `--ssldir` | `/etc/puppetlabs/puppet/ssl` | Puppet SSL directory |
 | `--allow-role` | `openvox_compiler` | `pp_role` permitted to fetch code; repeatable |
-| `--state` | `<root>/state` | Directory for the publisher's provenance log |
+| `--state` | `<root>/state` | Directory for the provenance log and materialized artifacts |
 
 **codavox stages nothing.** It reads a directory r10k already populated.
 Not owning the deploy keeps the trust boundary small and lets existing r10k
@@ -85,16 +85,21 @@ would pin a compiler to a stale version and defeat convergence.
 
 Returns the deterministic gzipped tar for that version.
 
-Only the **current** `code_id` is servable; a stale one returns `404`. Serving
-arbitrary historical versions would mean keeping every past tree on the
-publisher. Compilers retain old versions themselves, which is what in-flight
-agent runs actually need.
+The artifact is **materialized at seal time**, written to `<state>/artifacts`
+and served from there — never tarred from the staging directory on demand. This
+is what makes serving safe while r10k is mid-deploy: the bytes a compiler
+downloads are the snapshot taken when the tree was quiescent, so an overwrite in
+progress can never be streamed as a half-written archive whose bytes no longer
+match the advertised `code_id`.
+
+Only the **current** `code_id` is servable; a stale one returns `404`, because
+it is the only artifact kept on disk. A superseded artifact is reaped on the
+next reseal — safely, since an in-flight download holds an open descriptor and
+finishes even after the file is unlinked. Compilers retain old *versions*
+themselves, which is what in-flight agent runs actually need.
 
 Served `immutable` with a one-year max-age. The body is content-addressed by
 the `code_id` in the URL, so it can never change meaning.
-
-The archive is streamed rather than buffered — environments reach hundreds of
-megabytes and several compilers may poll at once.
 
 ### `GET /v1/health`
 
@@ -108,8 +113,25 @@ Sealing walks and hashes an entire environment, so it happens on `Reseal`, not
 per request. Two compilers polling either side of an r10k run would otherwise
 observe different ids for what is meant to be one deploy.
 
-The publisher seals once at startup. Triggering a reseal after each r10k run is
-the operator's job for now; a watch mode is planned.
+The publisher seals once at startup and again on every **`SIGHUP`**. Wire that
+to the deploy:
+
+```yaml
+# r10k.yaml
+postrun: ['/bin/sh', '-c', 'systemctl reload codavox-publish']
+```
+
+or send the signal directly (`systemctl reload codavox-publish`, or
+`kill -HUP <pid>`). Because the signal fires only after r10k has returned, the
+staging tree is quiescent when the reseal runs, so no reseal ever observes a
+half-written deploy. This is deliberately an *explicit post-deploy trigger*
+rather than a filesystem watch: codavox does not own the deploy, and a watch
+would have to reconstruct the "deploy finished" signal that `postrun` already
+provides — the same shape as PE's Code Manager committing after r10k, only
+across a process boundary because codavox observes rather than runs r10k.
+
+`SIGTERM` and interrupt shut the server down gracefully, draining in-flight
+downloads.
 
 A directory whose name OpenVox Server would reject is skipped rather than
 treated as fatal — one badly named directory in the staging area should not

@@ -55,6 +55,7 @@ func TestPublishBinaryEndToEnd(t *testing.T) {
 		"--listen", addr,
 		"--certname", "puppet.example.com",
 		"--ssldir", ssldir,
+		"--state", t.TempDir(),
 	)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
