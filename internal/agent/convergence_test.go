@@ -99,6 +99,84 @@ func (c compiler) codeID(t *testing.T, bin, env string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// syncOnceEnv runs the agent with no --environmentpath, supplying the layout
+// entirely through the environment the way CONTRIBUTING.md documents. Every
+// other test pins the path with a flag, which would hide the agent resolving it
+// differently from code-id.
+func (c compiler) syncOnceEnv(t *testing.T, bin, publisher string) error {
+	t.Helper()
+	cmd := exec.Command(bin, "agent",
+		"--publisher", publisher,
+		"--once",
+		"--certname", c.name,
+		"--ssldir", c.ssldir,
+	)
+	cmd.Env = append(os.Environ(),
+		"CODAVOX_ROOT="+c.root,
+		"CODAVOX_ENVIRONMENTPATH="+c.envPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return &execError{err: err, output: string(out)}
+	}
+	return nil
+}
+
+// The agent and code-id must resolve the environment path identically. They are
+// two processes reading and writing one symlink, so an override honored by only
+// one of them puts the deployed tree somewhere code-id does not look — the
+// divergence the single-source-of-truth design exists to prevent. The agent
+// previously ignored CODAVOX_ENVIRONMENTPATH while code-id honored it.
+func TestAgentAndCodeIDAgreeOnTheEnvironmentOverride(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary and binds a port")
+	}
+
+	bin := build(t)
+	ca := testca.New(t)
+
+	staging := t.TempDir()
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+
+	const addr = "127.0.0.1:18154"
+	pub := &publisher{
+		bin:     bin,
+		staging: staging,
+		addr:    addr,
+		ssldir:  ca.SSLDir(t, "puppet.example.com", "openvox_server"),
+	}
+	pub.restart(t)
+	t.Cleanup(pub.stop)
+
+	c := newCompiler(t, ca, "compiler01.example.com")
+
+	var err error
+	for range 40 {
+		if err = c.syncOnceEnv(t, bin, pub.url()); err == nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("compiler never synced: %v", err)
+	}
+
+	// code-id reads the same override. If the agent deployed anywhere else, this
+	// finds no link at all.
+	id, err := c.codeID(t, bin, "production")
+	if err != nil {
+		t.Fatalf("code-id after an env-configured sync: %v", err)
+	}
+	if id == "" {
+		t.Fatal("code-id reported an empty code_id")
+	}
+
+	// Nothing may have been written to the compiled-in default path.
+	if _, err := os.Lstat(filepath.Join("/opt/puppetlabs/codavox/environments", "production")); err == nil {
+		t.Error("the agent deployed to the built-in environment path despite CODAVOX_ENVIRONMENTPATH")
+	}
+	t.Logf("agent and code-id agree at %s", id)
+}
+
 // TestTwoCompilersConverge is the property the whole project exists for: two
 // independent compilers, each fetching over mutual TLS from a real publisher
 // process, must end up reporting the same code_id — and one that was offline

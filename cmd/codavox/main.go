@@ -414,6 +414,14 @@ func publishServe(args []string) error {
 
 // agentRun polls a publisher and converges this node onto it.
 func agentRun(args []string) error {
+	// The agent writes the very symlink code-id reads back, so both must resolve
+	// the environment path the same way. Seeding from layout.New() rather than
+	// from the bare constant keeps CODAVOX_ENVIRONMENTPATH meaning the same thing
+	// to both: otherwise the agent would deploy under the compiled-in default
+	// while code-id reported from the overridden path, which is exactly the
+	// two-sources-of-truth divergence this design exists to rule out.
+	base := layout.New()
+
 	opts := struct {
 		publisher string
 		certname  string
@@ -426,7 +434,7 @@ func agentRun(args []string) error {
 		prune     bool
 	}{
 		ssldir:   puppetca.DefaultSSLDir,
-		envPath:  layout.DefaultEnvironmentPath,
+		envPath:  base.EnvironmentPath,
 		interval: agent.DefaultInterval,
 		keep:     agent.DefaultKeep,
 		minAge:   agent.DefaultMinAge,
@@ -522,7 +530,7 @@ func agentRun(args []string) error {
 	a, err := agent.New(agent.Config{
 		BaseURL: opts.publisher,
 		Layout: layout.Layout{
-			Root:            layout.New().Root,
+			Root:            base.Root,
 			EnvironmentPath: opts.envPath,
 		},
 		Client: &http.Client{
