@@ -1,0 +1,83 @@
+# codavox configuration.
+#
+# Installed as a conffile: your edits survive package upgrades, and a new
+# version of this file arrives beside it as .rpmnew or .dpkg-dist.
+#
+# Everything is commented out, so this file changes nothing as shipped —
+# installing the package is not a configuration change. Uncomment what this
+# node needs, based on which units you enable:
+#
+#   codavox-publish.service        needs staging
+#   codavox-agent.service          needs agent.publisher
+#   codavox-deploy-server.service  needs staging, and api_token and/or secret
+#
+# Every setting here is also a command-line flag. A flag overrides this file,
+# and this file overrides the built-in default shown as the value.
+#
+# See /usr/share/doc/codavox/config.example.yaml for a populated example, and
+# https://github.com/miharp/codavox/blob/main/docs/configuration.md for the
+# full reference.
+#
+# code-id and code-content do not read this file: they run on every catalog
+# compile and stay a single symlink read.
+
+# --- Shared, used by publish, deploy, and deploy-server -----------------------
+
+# r10k's basedir, the tree the publisher seals. Required by publish and
+# deploy-server; no default.
+# staging: /etc/puppetlabs/code-staging
+
+# Where the publisher keeps its artifacts, pidfile, and provenance log.
+# state: /opt/puppetlabs/codavox/state
+
+# Puppet SSL material. codavox issues no certificates of its own.
+# ssldir:   /etc/puppetlabs/puppet/ssl
+# certname: this node's hostname
+
+# --- publish ------------------------------------------------------------------
+
+# publish:
+#   listen: ":8150"
+#
+#   # pp_role values allowed to fetch code. CA membership alone is not enough:
+#   # every enrolled node in the estate has a certificate from the same CA.
+#   allow_roles: [openvox_compiler]
+#
+#   # Refuse revoked certificates, read from <ssldir>/crl.pem. Puppet's own
+#   # values: chain (the default), leaf, or false. Set false only if your
+#   # estate distributes no CRL.
+#   certificate_revocation: chain
+
+# --- agent (compilers) --------------------------------------------------------
+
+# agent:
+#   # Required on a compiler; no default.
+#   publisher: https://puppet.example.com:8150
+#
+#   interval: 30s
+#   keep:     3
+#   min_age:  2h
+#
+#   # OpenVox Server's environmentpath. codavox owns this directory and puts
+#   # only symlinks in it, deliberately not the stock code/environments.
+#   environmentpath: /opt/puppetlabs/codavox/environments
+#
+#   # Remove environments the publisher no longer serves. Off by default;
+#   # deletion is destructive, so opt in. Needs r10k purge_levels set too.
+#   prune_environments: false
+
+# --- deploy and deploy-server -------------------------------------------------
+
+# r10k:        /opt/puppetlabs/puppet/bin/r10k
+# r10k_config: /etc/puppetlabs/r10k/r10k.yaml
+
+# deploy_server:
+#   listen: ":8170"
+#
+#   # Files holding the credentials, not the credentials themselves. Setting
+#   # api_token enables POST /v1/deploys; setting secret enables the webhook.
+#   # At least one is required for the daemon to start.
+#   api_token: /etc/codavox/api.token
+#   secret:    /etc/codavox/webhook.secret
+#
+#   history: 100

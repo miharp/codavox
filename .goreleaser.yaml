@@ -73,6 +73,25 @@ nfpms:
         file_info:
           mode: 0755
 
+      # The daemons are config-file driven, and every systemd unit below refers
+      # to this path, so the package has to put something there — an install
+      # that leaves the file absent gives `codavox agent` nothing to read and it
+      # exits telling the operator to pass --publisher.
+      #
+      # config|noreplace, so an upgrade never overwrites a site's settings: the
+      # new version lands beside it as .rpmnew / .dpkg-dist for the operator to
+      # merge. Every value is commented out, so the shipped file is inert and
+      # the built-in defaults still apply until something is uncommented.
+      - src: packaging/config.yaml
+        dst: /etc/codavox/config.yaml
+        type: config|noreplace
+        file_info:
+          mode: 0640
+
+      # The fully populated example, for reference alongside the live file.
+      - src: config.example.yaml
+        dst: /usr/share/doc/codavox/config.example.yaml
+
       # systemd units for the three daemons. They are config-file driven
       # (/etc/codavox/config.yaml), so a node runs `codavox agent`, `publish`,
       # or `deploy-server` by enabling the matching unit — one binary, one
