@@ -31,14 +31,18 @@ $COMPOSE up -d --build
 
 install_codavox() {
   local c="$1" arch pkgarch rpm
+  local -a pkgs
   arch=$(docker exec "$c" uname -m)
   case "$arch" in
     x86_64)  pkgarch=amd64 ;;
     aarch64) pkgarch=arm64 ;;
     *)       die "unsupported arch $arch" ;;
   esac
-  rpm=$(ls "$repo"/dist/codavox_*_linux_"${pkgarch}".rpm 2>/dev/null | head -1)
-  [ -n "$rpm" ] || die "no linux/$pkgarch package in dist/"
+  # Glob rather than parse ls: a package path with a space in it would otherwise
+  # split, and an unmatched glob leaves the pattern for the -f test to catch.
+  pkgs=("$repo"/dist/codavox_*_linux_"${pkgarch}".rpm)
+  rpm="${pkgs[0]}"
+  [ -f "$rpm" ] || die "no linux/$pkgarch package in dist/"
   docker cp "$rpm" "$c:/tmp/codavox.rpm" >/dev/null
   docker exec "$c" dnf install -y -q /tmp/codavox.rpm
 }

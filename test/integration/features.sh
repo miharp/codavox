@@ -74,16 +74,27 @@ fi
 # gated by the bearer token.
 log "Feature 4 — deploy server: health open, deploy API token-gated"
 health=$(docker exec "$COMPILER" bash -lc "curl -sk --max-time 5 https://primary:8170/v1/health")
-printf '%s' "$health" | grep -q '"status":"ok"' \
-  && pass "GET /v1/health -> $health" || fail "health check failed ($health)"
+if printf '%s' "$health" | grep -q '"status":"ok"'; then
+  pass "GET /v1/health -> $health"
+else
+  fail "health check failed ($health)"
+fi
+
 unauth=$(docker exec "$COMPILER" bash -lc \
   "curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://primary:8170/v1/deploys")
-[ "$unauth" = "401" ] && pass "GET /v1/deploys without a token -> 401" \
-  || fail "unauthenticated deploys returned $unauth, want 401"
+if [ "$unauth" = "401" ]; then
+  pass "GET /v1/deploys without a token -> 401"
+else
+  fail "unauthenticated deploys returned $unauth, want 401"
+fi
+
 auth=$(docker exec "$COMPILER" bash -lc \
   "curl -sk -o /dev/null -w '%{http_code}' --max-time 5 -H 'Authorization: Bearer integration-token' https://primary:8170/v1/deploys")
-[ "$auth" = "200" ] && pass "GET /v1/deploys with the token -> 200" \
-  || fail "authenticated deploys returned $auth, want 200"
+if [ "$auth" = "200" ]; then
+  pass "GET /v1/deploys with the token -> 200"
+else
+  fail "authenticated deploys returned $auth, want 200"
+fi
 
 # Feature 5: no fallback — asking for content at a version that is not deployed,
 # or an unknown environment, is a hard error, never a plausible-but-wrong answer.
