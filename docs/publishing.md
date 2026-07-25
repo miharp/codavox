@@ -4,7 +4,7 @@ The publisher seals staged environments and serves them to compilers over
 mutual TLS.
 
 ```console
-codavox publish --staging /etc/puppetlabs/code-staging
+codavox publish --staging /etc/puppetlabs/code/environments
 ```
 
 ```text
@@ -27,6 +27,30 @@ listening on :8150 as puppet.example.com (roles: openvox_compiler, certnames: no
 **codavox stages nothing.** It reads a directory r10k already populated.
 Not owning the deploy keeps the trust boundary small and lets existing r10k
 workflows continue untouched.
+
+### Pointing `--staging` at the right directory
+
+`--staging` is **r10k's `basedir`** — the directory holding one subdirectory per
+environment, not its parent:
+
+```yaml
+# r10k.yaml
+sources:
+  puppet:
+    basedir: /etc/puppetlabs/code/environments   # <- this is --staging
+```
+
+On a stock OpenVox install that is `/etc/puppetlabs/code/environments`, the
+codedir r10k has always deployed into. codavox needs no separate staging area
+and no change to how you deploy today.
+
+If you are coming from PE, the equivalent is
+`/etc/puppetlabs/code-staging/environments` — PE's Code Manager `environmentdir`
+default. Note the `environments` on the end; `/etc/puppetlabs/code-staging`
+itself is the file-sync *repository* root, one level too high.
+
+A directory whose subdirectories are not environments produces a publisher that
+sits there advertising nothing, which is the symptom of getting this wrong.
 
 ## Identity: no second PKI
 

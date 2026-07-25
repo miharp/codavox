@@ -11,7 +11,7 @@ compilers serve the same code", and the whole system rests on that.
 ## Usage
 
 ```console
-codavox seal /etc/puppetlabs/code-staging/production
+codavox seal /etc/puppetlabs/code/environments/production
 ```
 
 ```text

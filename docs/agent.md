@@ -58,6 +58,21 @@ may hold code deployed by other means.
 Owning a separate codedir avoids the collision entirely, and leaves the stock
 path untouched for anyone still using it.
 
+**PE does the same thing, one level up.** With versioned deploys enabled it
+moves `codedir` itself from `/etc/puppetlabs/code` to
+`/etc/puppetlabs/puppetserver/code`, a symlink its file-sync client points at
+the current versioned directory
+(`puppet_enterprise::profile::master`, lines 158–159 and 429 of
+`profile/master.pp`, verified in `pe-modules 2025.11.0.51`). Turning versioned
+deploys back off replaces that symlink with one back to `/etc/puppetlabs/code`.
+So the stock codedir is not where versioned code is served from in PE either —
+serving a directory you swap atomically and letting the deploy tool own the
+default path are the same requirement in both designs.
+
+The difference is granularity: PE swaps one symlink for the whole codedir,
+codavox swaps one per environment. That is what lets a single broken environment
+keep its last good version while the others converge.
+
 ## Pull, not push
 
 Polling is the correctness mechanism, not an optimization.

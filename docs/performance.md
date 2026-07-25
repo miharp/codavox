@@ -66,7 +66,7 @@ Point it at a real resolved tree for real-shape numbers:
 
 ```console
 CODAVOX_ACCEPTANCE=1 \
-  CODAVOX_ACCEPTANCE_TREE=/etc/puppetlabs/code-staging/production \
+  CODAVOX_ACCEPTANCE_TREE=/etc/puppetlabs/code/environments/production \
   go test -v ./test/acceptance/
 ```
 

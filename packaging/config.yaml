@@ -25,7 +25,7 @@
 
 # r10k's basedir, the tree the publisher seals. Required by publish and
 # deploy-server; no default.
-# staging: /etc/puppetlabs/code-staging
+# staging: /etc/puppetlabs/code/environments
 
 # Where the publisher keeps its artifacts, pidfile, and provenance log.
 # state: /opt/puppetlabs/codavox/state

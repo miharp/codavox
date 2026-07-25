@@ -10,7 +10,7 @@ deploy is triggered, it runs through the same path
 codavox deploy-server \
   --api-token /etc/codavox/api.token \
   --secret /etc/codavox/webhook.secret \
-  --staging /etc/puppetlabs/code-staging
+  --staging /etc/puppetlabs/code/environments
 ```
 
 Enable whichever front doors you need: `--api-token` turns on the API,

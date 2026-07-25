@@ -152,6 +152,11 @@ Removal leaves `/opt/puppetlabs/codavox/versions/` in place if it contains
 deployed code, and leaves `/etc/codavox/config.yaml` if you edited it. Delete
 both by hand if you want the node fully cleaned.
 
+## Next: running it for real
+
+Ports, disk sizing, failure modes, rollout order, and what to monitor are in
+[production.md](production.md). Read it before a fleet depends on this.
+
 ## Building packages locally
 
 Requires [GoReleaser](https://goreleaser.com).

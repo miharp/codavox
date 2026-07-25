@@ -6,7 +6,7 @@ staging, state, ssldir, certname, r10k — are set once.
 
 ```yaml
 # /etc/codavox/config.yaml
-staging:  /etc/puppetlabs/code-staging
+staging:  /etc/puppetlabs/code/environments
 state:    /opt/puppetlabs/codavox/state
 ssldir:   /etc/puppetlabs/puppet/ssl
 certname: puppet.example.com
