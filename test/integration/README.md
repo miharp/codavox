@@ -56,10 +56,20 @@ second compiler if you want that shape too.
    environment, is a **hard error** — never a plausible-but-wrong answer.
 6. **Prune.** The agent **reaps old version directories** rather than letting
    them accumulate.
-7. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
+7. **Fleet view.** `codavox compilers` on the publisher reports what the
+   compiler **says it is serving**, and that answer **equals the compiler's own
+   `codavox-code-id`**. It then follows a deploy through to the new version.
+8. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
    off its access to code** — with no restart of the publisher, and while the
    certificate is still cryptographically valid and still carries its `pp_role`.
    Runs last, because the compiler cannot fetch code afterwards.
+
+Features 7 and 8 are the two that **no Go test can replace**. Every Go test
+drives `agent --once` — a fresh process and a fresh TLS connection per sync —
+whereas here the agent is a long-running daemon polling over one keep-alive
+connection. A report that only rode on the first request of a connection, or a
+CRL consulted only at handshake, would pass the entire unit suite and fail
+here.
 
 ## Debugging a failed run
 

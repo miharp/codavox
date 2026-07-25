@@ -123,12 +123,92 @@ else
   fail "version directories grew to $count (prune not reaping)"
 fi
 
-# Feature 7: revoking a compiler's Puppet certificate revokes its access to code.
+# Feature 7: the publisher's fleet view reports what the compiler itself says it
+# is serving, and agrees with that node's own code-id.
+#
+# The agent here is a long-running daemon polling over one keep-alive connection,
+# which is exactly what no Go test can observe: every Go test drives `agent
+# --once`, a fresh process and a fresh connection per sync. If the report only
+# rode on the first request of a connection, or the publisher only read the
+# header at handshake, it would pass every unit test and fail here.
+log "Feature 7 — the fleet view matches what the compiler reports serving"
+
+# Read it the way an operator does: on the publisher, using that node's own
+# certificate. No --publisher, so the default URL is exercised too.
+fleet_json() {
+  docker exec "$PRIMARY" codavox compilers --json 2>/dev/null
+}
+
+# reported_code_id — read the compiler's reported production code_id from a
+# fleet view on stdin. Parsed on the host: the harness inspects everything else
+# host-side too, and the container image is not ours to add tools to.
+reported_code_id() {
+  python3 -c 'import json,sys
+d = json.load(sys.stdin)
+print(next((p["serving"].get("production", "") for p in d
+            if p["certname"] == "compiler" and p.get("serving")), ""))' 2>/dev/null
+}
+
+if fleet=$(fleet_json) && [ -n "$fleet" ]; then
+  pass "codavox compilers returned a fleet view"
+else
+  fail "codavox compilers returned nothing"
+  fleet='[]'
+fi
+
+own=$(code_id "$COMPILER" production)
+serving=$(printf '%s' "$fleet" | reported_code_id)
+
+if [ -n "$serving" ] && [ "$serving" = "$own" ]; then
+  pass "publisher and compiler agree on $own"
+else
+  fail "publisher says '$serving', the compiler's own code-id says '$own'"
+fi
+
+# And it must track a deploy, not just report a stale answer that happened to
+# match. The agent reports again as soon as it converges, so this is bounded by
+# the poll interval, not by two of them.
+bump_and_reseal
+if wait_for 60 "$COMPILER" "[ \"\$(codavox-code-id production)\" != '$own' ]"; then
+  moved=$(code_id "$COMPILER" production)
+  # Give the report that follows convergence a moment to land.
+  sleep 5
+  after=$(fleet_json | reported_code_id)
+  if [ "$after" = "$moved" ]; then
+    pass "the fleet view followed the deploy to $moved"
+  else
+    fail "the fleet view says '$after' after the compiler moved to '$moved'"
+  fi
+else
+  fail "the compiler did not converge on a new code_id"
+fi
+
+# The table form is what an operator actually reads.
+#
+# COMMIT is expected to be "-" here: this harness stages code by appending to
+# site.pp rather than by running r10k, so there is no .r10k-deploy.json to read a
+# control-repo commit from. That is the no-fallback rule showing up in the fleet
+# view — a missing provenance record reads as absent, never as another version's
+# commit — so it is asserted rather than tolerated.
+if table=$(docker exec "$PRIMARY" codavox compilers 2>/dev/null) \
+  && printf '%s' "$table" | grep -q compiler; then
+  pass "codavox compilers listed the compiler"
+  printf '%s\n' "$table" | sed 's/^/      /'
+  if printf '%s' "$table" | grep -qE '^compiler +production +[0-9a-f]{12} +- '; then
+    pass "an unrecorded code_id reports no commit rather than inventing one"
+  else
+    fail "expected COMMIT to be '-' with no r10k deploy record"
+  fi
+else
+  fail "codavox compilers did not list the compiler"
+fi
+
+# Feature 8: revoking a compiler's Puppet certificate revokes its access to code.
 # The certificate stays cryptographically valid and keeps its pp_role, so only
 # the CRL check stops it — and it must take effect without restarting anything.
 #
 # This runs last: the compiler cannot fetch code afterwards.
-log "Feature 7 — revoking a compiler's certificate cuts off its access to code"
+log "Feature 8 — revoking a compiler's certificate cuts off its access to code"
 before=$(code_id "$COMPILER" production)
 # Keep the output: when this failed in CI it was suppressed, so the log said
 # only "could not revoke" and not that the CA host did not resolve.
