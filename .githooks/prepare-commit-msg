@@ -1,9 +1,29 @@
 #!/bin/sh
-# Append a DCO Signed-off-by trailer if one is not already present.
+# Append this project's commit trailers when they are not already present.
 #
-# OpenVox projects require DCO sign-off (`git commit -s`). Relying on the flag
-# means it is forgotten exactly once, and fixing that afterwards means
-# rewriting history. The hook makes it automatic.
+#   Signed-off-by     DCO, which OpenVox projects require (`git commit -s`).
+#                     Always added: it is a statement about the committer, and
+#                     it is true of every commit.
+#
+#   Co-Authored-By    Attribution for a co-author, typically an AI assistant.
+#                     Only added when you have configured one, because it is a
+#                     claim about who actually worked on the commit. Hardcoding
+#                     any single tool would credit it on commits it never touched
+#                     and say nothing for everyone using a different one, so the
+#                     hook takes whatever value you give it and validates none of
+#                     them.
+#
+# Configure it per clone, with the identity your assistant documents for itself:
+#
+#   git config codavox.coauthor "Co-Authored-By: <name> <email>"
+#
+# --add sets more than one, for crediting a person and a tool at once. Unset it
+# and this hook only handles the sign-off:
+#
+#   git config --unset-all codavox.coauthor
+#
+# Trailers are appended as one contiguous block. git stops parsing trailers at a
+# blank line, so a gap would turn one block it understands into two it does not.
 #
 # Enable with: git config core.hooksPath .githooks
 
@@ -14,9 +34,37 @@ name=$(git config user.name)
 email=$(git config user.email)
 [ -n "$name" ] && [ -n "$email" ] || exit 0
 
-trailer="Signed-off-by: $name <$email>"
+signoff="Signed-off-by: $name <$email>"
 
-# grep -F: the trailer contains regex metacharacters in the email/name.
-if ! grep -qF "$trailer" "$msg_file"; then
-    printf '\n%s\n' "$trailer" >> "$msg_file"
+pending=''
+
+# Co-authors first, so the sign-off stays last as convention expects.
+#
+# Split on newlines only, in this shell rather than a pipeline's subshell, so
+# each configured value survives with its spaces intact and $pending keeps what
+# the loop adds.
+coauthors=$(git config --get-all codavox.coauthor 2>/dev/null)
+if [ -n "$coauthors" ]; then
+    saved_ifs=$IFS
+    IFS='
+'
+    for coauthor in $coauthors; do
+        # grep -F: the trailer contains regex metacharacters in the address.
+        grep -qF "$coauthor" "$msg_file" || pending="$pending$coauthor
+"
+    done
+    IFS=$saved_ifs
+fi
+
+grep -qF "$signoff" "$msg_file" || pending="$pending$signoff
+"
+
+[ -n "$pending" ] || exit 0
+
+# The blank line separates the block from the message body, but only when there
+# is no trailer already there to append to.
+if grep -qE '^(Signed-off-by|Co-Authored-By):' "$msg_file"; then
+    printf '%s' "$pending" >> "$msg_file"
+else
+    printf '\n%s' "$pending" >> "$msg_file"
 fi

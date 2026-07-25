@@ -28,18 +28,25 @@ go test -bench BenchmarkCurrentCodeID ./internal/layout/   # guards the code-id 
 go test -run '^$' -fuzz FuzzExtractArchive -fuzztime 60s ./internal/seal/   # the untrusted-input boundary
 golangci-lint run ./...         # lint (CI pins golangci-lint v2.12.2)
 gofmt -l .                      # must print nothing
-shellcheck --external-sources $(find . -name '*.sh')       # the integration harness and postinstall
+shellcheck --external-sources $(find . -name '*.sh') .githooks/*   # harness, postinstall, git hooks
 npx cspell '**/*.md'            # docs only; add terms to cspell.json rather than rewording
 ```
 
-Requires Go 1.26. Targets `linux/amd64` and `linux/arm64` (both first-class;
-arm64 is the primary local dev target on Apple silicon). CI runs gofmt, `go
-vet`, golangci-lint, `-race` tests, markdownlint, and the cross-compile matrix.
+Requires Go 1.26 — CI takes the version from `go.mod`, so bumping the `go`
+directive moves every workflow with it. Targets `linux/amd64` and `linux/arm64`
+(both first-class; arm64 is the primary local dev target on Apple silicon). CI
+runs every command above plus `go vet`, markdownlint, govulncheck, and the
+cross-compile matrix.
 
 Exercise the compiler-side commands without root using `CODAVOX_ROOT` (see
-[CONTRIBUTING.md](CONTRIBUTING.md) for a copy-paste setup). Integration tests
-live in [test/integration/](test/integration/) and run against the ovadm Docker
-topology locally, not in CI.
+[CONTRIBUTING.md](CONTRIBUTING.md) for a copy-paste setup).
+
+The integration harness in [test/integration/](test/integration/) is
+self-contained: it stands up its own two-node OpenVox topology in Docker, needing
+no ovadm. It runs on push to `main`, and on a pull request touching workflows,
+packaging, or the harness itself — the paths nothing else verifies. Run it
+locally before any change to TLS or the agent's HTTP client: `agent --once` is a
+fresh process per sync, so no Go test can see keep-alive behavior.
 
 ## Architecture
 
