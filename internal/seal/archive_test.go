@@ -219,6 +219,86 @@ func TestExtractRejectsEscapingPaths(t *testing.T) {
 	}
 }
 
+// A short entry name is an ordinary path, not an escape attempt. The traversal
+// guard used to compare a three-byte prefix by slicing, which panicked on any
+// name shorter than that — crashing the agent on a control repo that merely
+// contained a two-character top-level entry, and on any artifact crafted to
+// carry one.
+func TestExtractAcceptsShortNames(t *testing.T) {
+	build := func(t *testing.T, name string, typeflag byte) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(zw)
+		hdr := &tar.Header{Name: name, Typeflag: typeflag, Mode: 0o644, Format: tar.FormatPAX}
+		if typeflag == tar.TypeReg {
+			hdr.Size = int64(len("ok\n"))
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte("ok\n")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+
+	cases := []struct {
+		name     string
+		entry    string
+		typeflag byte
+	}{
+		{"one-character file", "a", tar.TypeReg},
+		{"two-character file", "ca", tar.TypeReg},
+		{"two-character directory", "db", tar.TypeDir},
+		{"dot-prefixed short name", ".x", tar.TypeReg},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := filepath.Join(t.TempDir(), "extract")
+			if err := ExtractArchive(bytes.NewReader(build(t, tc.entry, tc.typeflag)), dst); err != nil {
+				t.Fatalf("extracting %q: %v", tc.entry, err)
+			}
+			if _, err := os.Stat(filepath.Join(dst, tc.entry)); err != nil {
+				t.Errorf("entry %q was not extracted: %v", tc.entry, err)
+			}
+		})
+	}
+}
+
+// The same case through the real seal path, since that is how it reaches a
+// compiler: a tree with a two-character top-level file must survive the round
+// trip with its code_id intact.
+func TestRoundTripWithShortTopLevelName(t *testing.T) {
+	src := tree(t, map[string]string{
+		"ca":                "cert\n",
+		"manifests/site.pp": "node default {}\n",
+	})
+
+	var buf bytes.Buffer
+	if err := WriteArchive(&buf, src); err != nil {
+		t.Fatalf("writing archive: %v", err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "extract")
+	if err := ExtractArchive(bytes.NewReader(buf.Bytes()), dst); err != nil {
+		t.Fatalf("extracting archive: %v", err)
+	}
+
+	if got, want := mustCodeID(t, dst), mustCodeID(t, src); got != want {
+		t.Errorf("round trip changed the code_id: got %s, want %s", got, want)
+	}
+}
+
 func TestExtractRejectsUnsupportedEntryTypes(t *testing.T) {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
