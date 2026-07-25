@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,7 @@ func (s *Store) Reseal() error {
 	s.mu.RUnlock()
 
 	next := map[string]sealedEnv{}
+	var failures []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -93,7 +95,17 @@ func (s *Store) Reseal() error {
 		envDir := filepath.Join(s.StagingDir, env)
 		id, err := seal.CodeID(envDir)
 		if err != nil {
-			return fmt.Errorf("sealing %s: %w", env, err)
+			// One environment failing must not stop the others being published,
+			// the same rule the agent applies when converging. An unreadable file
+			// or a stray socket in one module would otherwise block every
+			// environment's deploy — and, at startup, stop the publisher coming up
+			// at all, so no compiler in the estate could update.
+			//
+			// This does not soften "no fallbacks": the failed environment is
+			// reported and keeps whatever version it was already serving. Nothing
+			// is served under a code_id that does not describe it.
+			s.carryForward(next, prev, env, &failures, fmt.Errorf("sealing %s: %w", env, err))
+			continue
 		}
 
 		artifact := filepath.Join(s.ArtifactDir, layout.VersionDirName(env, id)+".tar.gz")
@@ -101,7 +113,9 @@ func (s *Store) Reseal() error {
 		// new code_id, or if the file went missing since the last reseal.
 		if prev[env].codeID != id || !fileExists(artifact) {
 			if err := materializeArtifact(artifact, envDir); err != nil {
-				return fmt.Errorf("materializing artifact for %s: %w", env, err)
+				s.carryForward(next, prev, env, &failures,
+					fmt.Errorf("materializing artifact for %s: %w", env, err))
+				continue
 			}
 		}
 		next[env] = sealedEnv{codeID: id, artifact: artifact}
@@ -128,7 +142,32 @@ func (s *Store) Reseal() error {
 	s.mu.Unlock()
 
 	reapArtifacts(old, next)
+
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		return fmt.Errorf("%w: %s", ErrPartialReseal, strings.Join(failures, "; "))
+	}
 	return nil
+}
+
+// ErrPartialReseal means some environments sealed and others did not. Callers
+// distinguish it from a hard failure — an unreadable staging directory, say —
+// because the publisher can still serve everything that did seal, and refusing
+// to start over one broken environment would strand the whole estate.
+var ErrPartialReseal = errors.New("reseal incomplete")
+
+// carryForward keeps an environment on the version it was already serving when
+// this reseal could not produce a new one.
+//
+// Dropping it instead would unpublish working code because of an unrelated
+// failure, and every polling compiler would see the environment vanish. Keeping
+// the last good version is the honest answer to "what is this environment?" —
+// the failure is reported separately, and the operator's next deploy retries.
+func (s *Store) carryForward(next, prev map[string]sealedEnv, env string, failures *[]string, err error) {
+	*failures = append(*failures, err.Error())
+	if last, ok := prev[env]; ok && fileExists(last.artifact) {
+		next[env] = last
+	}
 }
 
 func fileExists(path string) bool {

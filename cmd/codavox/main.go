@@ -374,8 +374,15 @@ func publishServe(args []string) error {
 	}
 	store.EnableProvenance(provLog)
 
+	// A single broken environment must not keep the publisher from starting: the
+	// rest of the estate still needs its code, and refusing to come up would turn
+	// one bad module into a fleet-wide outage. It is reported loudly and the
+	// environments that did seal are served.
 	if err := store.Reseal(); err != nil {
-		return err
+		if !errors.Is(err, publish.ErrPartialReseal) {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "codavox: %v\n", err)
 	}
 
 	for env, id := range store.Environments() {
@@ -411,9 +418,15 @@ func publishServe(args []string) error {
 			case <-ctx.Done():
 				return
 			case <-hup:
-				if err := store.Reseal(); err != nil {
+				// A partial failure still updated every environment that sealed,
+				// so report the problem and go on to list what is now served
+				// rather than leaving the operator guessing which took effect.
+				err := store.Reseal()
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "reseal failed: %v\n", err)
-					continue
+					if !errors.Is(err, publish.ErrPartialReseal) {
+						continue
+					}
 				}
 				for env, id := range store.Environments() {
 					fmt.Fprintf(os.Stderr, "resealed %s %s\n", env, id)

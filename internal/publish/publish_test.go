@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/miharp/codavox/internal/puppetca"
@@ -35,6 +38,103 @@ func staging(t *testing.T, envs map[string]map[string]string) *Store {
 		t.Fatalf("Reseal: %v", err)
 	}
 	return s
+}
+
+// One unsealable environment must not take the others down with it. A stray
+// socket or an unreadable file in one module would otherwise block every
+// environment's deploy, and at startup stop the publisher coming up at all —
+// turning one bad module into a fleet-wide outage.
+func TestResealIsolatesAFailingEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	write := func(env, name, body string) {
+		t.Helper()
+		full := filepath.Join(dir, env, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("production", "manifests/site.pp", "node default { }\n")
+	write("testing", "manifests/site.pp", "node default { }\n")
+
+	// A FIFO has no reproducible content, so sealing "broken" fails the way a
+	// stray socket or device node in a module would.
+	if err := os.MkdirAll(filepath.Join(dir, "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "broken", "pipe"), 0o644); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+
+	s := NewStore(dir, t.TempDir())
+	err := s.Reseal()
+	if err == nil {
+		t.Fatal("a failing environment was not reported")
+	}
+	if !errors.Is(err, ErrPartialReseal) {
+		t.Errorf("error = %v, want ErrPartialReseal so the publisher can still start", err)
+	}
+	if !strings.Contains(err.Error(), "broken") {
+		t.Errorf("error does not name the failing environment: %v", err)
+	}
+
+	envs := s.Environments()
+	for _, env := range []string{"production", "testing"} {
+		if envs[env] == "" {
+			t.Errorf("%s was not published despite sealing cleanly", env)
+		}
+	}
+	if _, ok := envs["broken"]; ok {
+		t.Error("the failing environment was published anyway")
+	}
+}
+
+// An environment that breaks after it has been published keeps serving the
+// version it already had. Dropping it would unpublish working code over an
+// unrelated failure, and every polling compiler would watch it disappear.
+func TestResealKeepsTheLastGoodVersionOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	site := filepath.Join(dir, "production", "manifests", "site.pp")
+	if err := os.MkdirAll(filepath.Dir(site), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(site, []byte("node default { }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore(dir, t.TempDir())
+	if err := s.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	before, ok := s.CodeID("production")
+	if !ok {
+		t.Fatal("production was not published")
+	}
+
+	// Break it the way a bad deploy would.
+	if err := syscall.Mkfifo(filepath.Join(dir, "production", "pipe"), 0o644); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+
+	if err := s.Reseal(); !errors.Is(err, ErrPartialReseal) {
+		t.Fatalf("error = %v, want ErrPartialReseal", err)
+	}
+
+	after, ok := s.CodeID("production")
+	if !ok {
+		t.Fatal("production was unpublished by a failed reseal")
+	}
+	if after != before {
+		t.Errorf("code_id changed on a failed reseal: %s -> %s", before, after)
+	}
+	// The artifact for the version still being advertised has to remain
+	// downloadable, or a compiler polling now gets a 404 for what it is told to
+	// fetch.
+	if _, ok := s.Artifact("production", after); !ok {
+		t.Error("the carried-forward version has no artifact to serve")
+	}
 }
 
 func TestReseal(t *testing.T) {
