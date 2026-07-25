@@ -1,13 +1,18 @@
 package agent
 
 import (
+	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/miharp/codavox/internal/publish"
+	"github.com/miharp/codavox/internal/puppetca"
 	"github.com/miharp/codavox/internal/testca"
 )
 
@@ -501,4 +506,270 @@ func TestCompilerWithoutRoleIsAdmittedByCertname(t *testing.T) {
 	if err := unnamed.syncOnce(t, bin, pub.url()); err == nil {
 		t.Error("a node absent from the allowlist fetched code")
 	}
+}
+
+// The publisher's fleet view must agree with what each compiler would answer
+// for itself. That equality is the whole claim: an operator reads /v1/compilers
+// instead of running code-id on every node, so anything the two can disagree
+// about is a wrong answer delivered confidently.
+//
+// This runs the real binaries over real mutual TLS, because the certname the
+// report is filed under comes from the peer certificate.
+func TestFleetViewMatchesWhatCompilersServe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary and binds a port")
+	}
+
+	bin := build(t)
+	ca := testca.New(t)
+
+	staging := t.TempDir()
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	writeEnv(t, staging, "testing", map[string]string{"manifests/site.pp": "t1\n"})
+
+	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
+	const addr = "127.0.0.1:18154"
+	const publisher = "https://" + addr
+
+	pub := exec.Command(bin, "publish",
+		"--staging", staging, "--listen", addr,
+		"--certname", "puppet.example.com", "--ssldir", serverSSL,
+		"--state", t.TempDir())
+	pub.Stderr = os.Stderr
+	if err := pub.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = pub.Process.Kill()
+		_ = pub.Wait()
+	})
+
+	c1 := newCompiler(t, ca, "compiler01.example.com")
+	c2 := newCompiler(t, ca, "compiler02.example.com")
+
+	var err error
+	for range 40 {
+		if err = c1.syncOnce(t, bin, publisher); err == nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("compiler01 never synced: %v", err)
+	}
+	if err := c2.syncOnce(t, bin, publisher); err != nil {
+		t.Fatalf("compiler02 sync: %v", err)
+	}
+
+	// No second sync: the report must land within the run that deployed, not on
+	// the following poll. A whole interval of lag would show a compiler that
+	// just converged as one that had not.
+	fleet := c1.fleet(t, publisher)
+	if len(fleet) != 2 {
+		t.Fatalf("fleet view has %d compilers, want 2: %+v", len(fleet), fleet)
+	}
+
+	byName := map[string]publish.Peer{}
+	for _, peer := range fleet {
+		byName[peer.Certname] = peer
+	}
+
+	for _, c := range []compiler{c1, c2} {
+		peer, ok := byName[c.name]
+		if !ok {
+			t.Errorf("%s is missing from the fleet view", c.name)
+			continue
+		}
+		for _, env := range []string{"production", "testing"} {
+			want, err := c.codeID(t, bin, env)
+			if err != nil {
+				t.Fatalf("%s code-id %s: %v", c.name, env, err)
+			}
+			if peer.Serving[env] != want {
+				t.Errorf("fleet view says %s serves %s at %q; the node itself says %q",
+					c.name, env, peer.Serving[env], want)
+			}
+		}
+		if peer.ServingAt.IsZero() {
+			t.Errorf("%s has no serving_at", c.name)
+		}
+	}
+
+	// And it must report staleness, not just agreement. compiler02 stays away
+	// across a deploy, so the two legitimately diverge — the case the view
+	// exists to make visible.
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v2\n"})
+	if err := pub.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+
+	before := byName[c1.name].Serving["production"]
+	var deployed string
+	for range 40 {
+		if err := c1.syncOnce(t, bin, publisher); err != nil {
+			t.Fatal(err)
+		}
+		if deployed, err = c1.codeID(t, bin, "production"); err != nil {
+			t.Fatal(err)
+		}
+		if deployed != before {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	fleet = c1.fleet(t, publisher)
+	byName = map[string]publish.Peer{}
+	for _, peer := range fleet {
+		byName[peer.Certname] = peer
+	}
+
+	if got := byName[c1.name].Serving["production"]; got != deployed {
+		t.Errorf("compiler01 reports %q, want the new version %q", got, deployed)
+	}
+	stale := byName[c2.name].Serving["production"]
+	if stale == deployed {
+		t.Error("compiler02 never polled, so it cannot be serving the new version")
+	}
+	// Which is exactly what that node would still answer.
+	if want, err := c2.codeID(t, bin, "production"); err != nil {
+		t.Fatal(err)
+	} else if stale != want {
+		t.Errorf("fleet view says compiler02 serves %q; the node says %q", stale, want)
+	}
+	t.Logf("fleet view shows the divergence: compiler01 %s, compiler02 %s", deployed, stale)
+}
+
+// fleet reads /v1/compilers as this compiler, over mutual TLS. Only an
+// authorized peer can read it, so a compiler's own certificate is the natural
+// credential for the test.
+func (c compiler) fleet(t *testing.T, publisher string) []publish.Peer {
+	t.Helper()
+	tlsCfg, err := puppetca.Paths{SSLDir: c.ssldir, CertName: c.name}.ClientTLS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+	defer client.CloseIdleConnections()
+
+	resp, err := client.Get(publisher + publish.CompilersPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d", publish.CompilersPath, resp.StatusCode)
+	}
+	var peers []publish.Peer
+	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+		t.Fatal(err)
+	}
+	return peers
+}
+
+// The operator's path, end to end: `codavox compilers` on the publisher node,
+// with no flags beyond what publishing already needs. This is what makes the
+// fleet view usable — the endpoint alone is only reachable by a compiler, and
+// the publisher's own certificate carries no compiler role.
+func TestCompilersCommandOnThePublisher(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary and binds a port")
+	}
+
+	bin := build(t)
+	ca := testca.New(t)
+
+	staging := t.TempDir()
+	writeEnv(t, staging, "production", map[string]string{
+		"manifests/site.pp": "v1\n",
+		// r10k leaves this behind; the publisher reads it to record which
+		// control-repo commit produced the code_id. It is excluded from
+		// sealing, so it never reaches a compiler.
+		".r10k-deploy.json": `{"signature":"a3f1c9e4b2d8f70e","finished_at":"2026-07-25 12:00:00 -0400"}`,
+	})
+
+	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
+	const addr = "127.0.0.1:18155"
+	const publisher = "https://" + addr
+
+	state := t.TempDir()
+	pub := exec.Command(bin, "publish",
+		"--staging", staging, "--listen", addr,
+		"--certname", "puppet.example.com", "--ssldir", serverSSL,
+		"--state", state)
+	pub.Stderr = os.Stderr
+	if err := pub.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = pub.Process.Kill()
+		_ = pub.Wait()
+	})
+
+	c1 := newCompiler(t, ca, "compiler01.example.com")
+	var err error
+	for range 40 {
+		if err = c1.syncOnce(t, bin, publisher); err == nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("compiler01 never synced: %v", err)
+	}
+
+	// Run as the publisher node would: its own certname and ssldir, and no
+	// --publisher, so the default URL is exercised too. The address is a literal
+	// IP here rather than the certname, which a test host cannot resolve.
+	compilers := func(t *testing.T, extra ...string) string {
+		t.Helper()
+		args := append([]string{"compilers",
+			"--certname", "puppet.example.com",
+			"--ssldir", serverSSL,
+			"--publisher", publisher,
+			"--state", state,
+		}, extra...)
+		out, err := exec.Command(bin, args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("codavox compilers: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+
+	want, err := c1.codeID(t, bin, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := compilers(t)
+	if !strings.Contains(out, "compiler01.example.com") || !strings.Contains(out, want[:12]) {
+		t.Errorf("codavox compilers did not report the compiler at %s:\n%s", want, out)
+	}
+	// A code_id is a content hash, so the commit is what an operator recognizes.
+	// The join happens locally against the publisher's provenance log.
+	if !strings.Contains(out, "a3f1c9e4b2d8") {
+		t.Errorf("codavox compilers did not resolve the code_id to a commit:\n%s", out)
+	}
+	t.Logf("codavox compilers:\n%s", out)
+
+	// --json carries both ids at full length: it is what a monitoring check
+	// reads, and a shortened id cannot be compared exactly.
+	raw := compilers(t, "--json")
+	var records []struct {
+		publish.Peer
+		Commits map[string]string `json:"commits"`
+	}
+	if err := json.Unmarshal([]byte(raw), &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("--json reported %d compilers, want 1:\n%s", len(records), raw)
+	}
+	if got := records[0].Serving["production"]; got != want {
+		t.Errorf("--json code_id = %q, want the full %q", got, want)
+	}
+	if got := records[0].Commits["production"]; got != "a3f1c9e4b2d8f70e" {
+		t.Errorf("--json commit = %q, want the full a3f1c9e4b2d8f70e", got)
+	}
+	t.Logf("codavox compilers --json:\n%s", raw)
 }

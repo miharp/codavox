@@ -268,20 +268,30 @@ func (s *Store) Artifact(env, codeID string) (string, bool) {
 // request, not to know that it is a CRL lookup.
 type PeerCheck func(*tls.ConnectionState) error
 
-// Handler routes the publisher's HTTP API, applying check to every request.
+// Handler routes the publisher's HTTP API, applying check to every request and
+// recording what each compiler did into peers.
 //
-// A nil check disables it, which is what a plaintext test server wants.
-func Handler(s *Store, check PeerCheck) http.Handler {
+// A nil check disables the check, which is what a plaintext test server wants;
+// a nil peers disables recording. Both are separate arguments because they are
+// separate concerns that happen to share the same moment in the request.
+func Handler(s *Store, check PeerCheck, peers *Peers) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/environments", s.handleEnvironments)
-	mux.HandleFunc("GET /v1/artifact/{env}/{codeID}", s.handleArtifact)
+	mux.HandleFunc("GET /v1/environments", s.handleEnvironments(peers))
+	mux.HandleFunc("GET /v1/artifact/{env}/{codeID}", s.handleArtifact(peers))
+	mux.HandleFunc("GET /v1/compilers", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Never cached: the whole value is in how fresh last_seen is.
+		w.Header().Set("Cache-Control", "no-store")
+		list := peers.List()
+		if list == nil {
+			list = []Peer{}
+		}
+		_ = json.NewEncoder(w).Encode(list)
+	})
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
-	if check == nil {
-		return mux
-	}
 	return guardPeer(mux, check)
 }
 
@@ -294,19 +304,38 @@ func Handler(s *Store, check PeerCheck) http.Handler {
 // Checking here closes that window to a single request.
 func guardPeer(next http.Handler, check PeerCheck) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := check(r.TLS); err != nil {
-			// 403, not 401: the peer authenticated fine, it is simply no longer
-			// allowed. Naming it makes the publisher's log answer "why did that
-			// compiler stop updating?" without a packet capture.
-			fmt.Fprintf(os.Stderr, "refusing %s: %v\n", r.URL.Path, err)
-			http.Error(w, "peer is not permitted", http.StatusForbidden)
-			return
+		if check != nil {
+			if err := check(r.TLS); err != nil {
+				// 403, not 401: the peer authenticated fine, it is simply no
+				// longer allowed. Naming it makes the publisher's log answer
+				// "why did that compiler stop updating?" without a packet
+				// capture.
+				fmt.Fprintf(os.Stderr, "refusing %s: %v\n", r.URL.Path, err)
+				http.Error(w, "peer is not permitted", http.StatusForbidden)
+				return
+			}
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (s *Store) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
+// handleEnvironments serves the version map, recording the poll.
+//
+// Recording happens here rather than in the middleware because the middleware
+// runs before the mux has routed, so a request's path values are not populated
+// yet — an artifact fetch would be recorded with an empty environment.
+func (s *Store) handleEnvironments(peers *Peers) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		certname := peerCertname(r.TLS)
+		now := time.Now().UTC()
+		peers.observePoll(certname, now)
+		peers.observeServing(certname, ParseServing(r.Header.Get(ServingHeader)), now)
+		s.serveEnvironments(w)
+	}
+}
+
+func (s *Store) serveEnvironments(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	// Polling is the correctness mechanism, so this response must never be
 	// served from a cache that could pin a compiler to a stale version.
@@ -316,7 +345,17 @@ func (s *Store) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func (s *Store) handleArtifact(w http.ResponseWriter, r *http.Request) {
+// handleArtifact streams a version's artifact, recording the fetch.
+//
+// The fetch is recorded only once the artifact has been found, so a compiler
+// asking for a stale code_id and getting a 404 is never reported as holding it.
+func (s *Store) handleArtifact(peers *Peers) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.serveArtifact(w, r, peers)
+	}
+}
+
+func (s *Store) serveArtifact(w http.ResponseWriter, r *http.Request, peers *Peers) {
 	env := r.PathValue("env")
 	codeID := r.PathValue("codeID")
 
@@ -346,6 +385,8 @@ func (s *Store) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = f.Close() }()
 
+	peers.observeFetch(peerCertname(r.TLS), env, codeID, time.Now().UTC())
+
 	w.Header().Set("Content-Type", "application/gzip")
 	// The body is content-addressed by the code_id in the URL, so it can never
 	// change meaning; anything that caches it may keep it indefinitely.
@@ -370,6 +411,8 @@ type Server struct {
 	// peer when a connection is established, which a keep-alive client does once
 	// and then never again.
 	PeerCheck PeerCheck
+	// Peers records what each compiler was observed doing, for the fleet view.
+	Peers *Peers
 }
 
 // Serve runs until ctx is cancelled, then shuts down gracefully.
@@ -380,7 +423,7 @@ type Server struct {
 func (srv *Server) Serve(ctx context.Context) error {
 	s := &http.Server{
 		Addr:      srv.Addr,
-		Handler:   Handler(srv.Store, srv.PeerCheck),
+		Handler:   Handler(srv.Store, srv.PeerCheck, srv.Peers),
 		TLSConfig: srv.TLSConfig,
 		// A compiler that stalls mid-request must not hold a connection open
 		// indefinitely; the publisher serves the whole estate.
@@ -420,6 +463,26 @@ func PidFilePath(stateDir string) string { return filepath.Join(stateDir, "publi
 
 // EnvironmentsPath is the polling endpoint compilers use.
 const EnvironmentsPath = "/v1/environments"
+
+// CompilersPath reports what the publisher knows about each compiler.
+const CompilersPath = "/v1/compilers"
+
+// ServingHeader is how an agent reports what it is currently serving, as
+// `environment=code_id` pairs separated by commas.
+//
+// The agent reads these from its own environment symlinks — the same source
+// code-id reads — so the publisher reports the compiler's own answer rather
+// than inferring one from what it was seen to fetch. PE reaches the same place
+// from the other direction: its file-sync client exposes its state on the
+// standard status endpoint, and something central fans out to collect it. That
+// needs a listener on every compiler and PuppetDB to discover them; folding the
+// report into a poll the agent already makes needs neither, and keeps every
+// connection outbound from the compiler.
+const ServingHeader = "X-Codavox-Serving"
+
+// maxServingHeader bounds what is parsed from a peer, so an estate with an
+// unreasonable number of environments cannot turn a poll into unbounded work.
+const maxServingHeader = 8 << 10
 
 // ArtifactPath builds the artifact URL for an environment and code_id.
 func ArtifactPath(env, codeID string) string {

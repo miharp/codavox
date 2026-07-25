@@ -134,6 +134,17 @@ Setting `allow_certnames` and no roles means exactly that: no role admits
 anyone. The default of `openvox_compiler` applies only when neither is
 configured.
 
+### The publisher's own certname
+
+The publisher always admits its own certname, without it being listed. That is
+what lets an operator run [`codavox compilers`](commands.md#codavox-compilers)
+on the publisher with no extra configuration: the node's certificate carries
+`openvox_server`, not a compiler role, and nobody thinks to add the publisher to
+its own allowlist.
+
+It grants nothing new. The key is already on that node, and a node presenting
+its own certificate to its own listener is the same trust boundary on both ends.
+
 ## API
 
 ### `GET /v1/environments`
@@ -167,6 +178,61 @@ themselves, which is what in-flight agent runs actually need.
 
 Served `immutable` with a one-year max-age. The body is content-addressed by
 the `code_id` in the URL, so it can never change meaning.
+
+### `GET /v1/compilers`
+
+What every compiler is serving, as the compilers themselves report it.
+
+```json
+[
+  {
+    "certname": "compiler01.example.com",
+    "last_seen": "2026-07-25T16:00:12Z",
+    "last_poll": "2026-07-25T16:00:12Z",
+    "serving": {
+      "production": "3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb"
+    },
+    "serving_at": "2026-07-25T16:00:12Z",
+    "polls": 240,
+    "fetches": 3
+  }
+]
+```
+
+Read it with [`codavox compilers`](commands.md#codavox-compilers), which formats
+it as a table and joins each `code_id` to the control-repo commit that produced
+it, from the provenance log below.
+
+The endpoint itself carries no commits: the provenance log stays publisher-only,
+and the join happens in the command, which already runs on the publisher.
+
+`serving` is what that compiler said about itself, read from the same
+environment symlink its `code-id` reads — so the fleet view and the node agree
+by construction. Agents report it on the poll they already make every interval,
+as an `X-Codavox-Serving: <env>=<code_id>,...` header, so **no compiler needs to
+listen on anything**. Every connection still originates at the compiler, which
+is the property that lets a compiler behind a firewall converge at all.
+
+An agent that changes anything reports again before it finishes, so the view is
+current the moment a compiler converges rather than at its next poll.
+
+`fetched` and the counters are weaker: they are what the publisher watched
+happen. An agent that downloaded an artifact can still have failed to verify or
+unpack it, which is exactly why the agent reports the symlink rather than
+letting the publisher infer from downloads.
+
+PE arrives at the same place from the other direction — its file-sync client
+exposes its state on each compiler's status endpoint, and something central fans
+out to collect it. That needs a listener on every compiler and PuppetDB to
+discover them. Folding the report into a poll the agent already makes needs
+neither.
+
+The view is **in memory and best effort**. Persisting it would create a second
+store of state the symlink already owns, with its own staleness and failure
+modes, to answer a question that is diagnostic rather than load-bearing. A
+publisher restart empties it, and a healthy fleet refills it within one interval.
+
+Served `no-store`: the whole value is in how fresh `last_poll` is.
 
 ### `GET /v1/health`
 

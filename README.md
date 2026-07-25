@@ -123,6 +123,20 @@ Because "which version?" is a content hash every compiler computes the same way,
 divergence between compilers becomes visible and self-correcting instead of a
 silent bug.
 
+You can see it for the whole fleet at once. Each agent reports what it is
+serving — read from the same symlink `code-id` reads — on the poll it already
+makes, so the publisher can answer for every compiler:
+
+```console
+$ codavox compilers
+COMPILER                ENVIRONMENT  CODE_ID       COMMIT        LAST POLL
+compiler01.example.com  production   3224ddbe7e3d  a3f1c9e4b2d8  12s ago
+compiler02.example.com  production   7b05ff282795  61d70aa9c3e5  9m0s ago
+```
+
+The `code_id` is what OpenVox Server pins catalogs to; the commit beside it is
+what you recognize, joined from r10k's own deploy record.
+
 ## Install
 
 Download the package for your architecture from the

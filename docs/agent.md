@@ -138,6 +138,43 @@ environments from staging (`purge_levels` in `r10k.yaml`); otherwise the deleted
 branch never leaves the publisher's staging directory. See
 [deploying.md](deploying.md#deleting-environments).
 
+## Reporting what it serves
+
+On every poll the agent tells the publisher what this compiler is currently
+serving, as an `X-Codavox-Serving: <env>=<code_id>,...` header on the request it
+was already making. The values come from its own environment symlinks — the same
+ones `code-id` reads — so the publisher's fleet view and this node's `code-id`
+give the same answer.
+
+Read it with [`codavox compilers`](commands.md#codavox-compilers) on the
+publisher.
+
+**A reconciliation that changes anything reports again before it returns**, so
+the fleet view is current the moment a compiler converges rather than at its
+next poll. Waiting would put a whole interval between "this compiler is on the
+new code" and "the fleet view says so" — long enough for an operator watching a
+deploy land to read a converged compiler as a stale one. It costs one request,
+and only on a run that changed something: the steady state of a converged
+compiler finding nothing to do adds nothing, and the request goes down the
+keep-alive connection the poll just used.
+
+Two more consequences follow from reporting rather than being asked:
+
+- **No compiler listens on anything.** Every connection still originates here,
+  which is what lets a compiler behind a firewall converge at all. PE solves the
+  same problem by having each compiler expose its state on a status endpoint and
+  something central collect it — which needs a listener per compiler and
+  PuppetDB to find them.
+- **The report describes disk, not intent.** A version that failed verification
+  was discarded, so the agent reports the version it is still serving. Inferring
+  convergence from downloads would have reported the new one.
+
+It is best effort throughout: an unreadable symlink is left out of the report
+rather than failing the poll, and a failed report is not retried, because the
+next poll carries the same one. Trading a working deploy for a diagnostic would
+be the wrong way round. An agent older than this feature sends no header and
+shows as `(not reported)`.
+
 ## Failure handling
 
 One environment failing to sync does not stop the others. Failures are logged

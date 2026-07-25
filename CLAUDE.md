@@ -118,6 +118,15 @@ argument, and each is defended by a test or a doc.
   revocation would not land until that connection dropped. A missing or
   unverifiable CRL is a startup error, never a silent downgrade to "nothing is
   revoked". Follows PE, which sets `ssl-crl-path` on every service listener.
+- **Fleet visibility is self-reported, never inferred.** `/v1/compilers` and
+  `codavox compilers` report what each agent said it is serving, read from its
+  own environment symlink — the same one `code-id` reads — so the two must
+  agree. The publisher also sees which artifacts it handed out, but a compiler
+  that downloaded one can still have failed to verify or unpack it, so inferring
+  convergence from downloads would confidently report a stale node as current.
+  The view is in-memory and best effort by design: persisting it would create a
+  second store of state the symlink already owns, to answer a diagnostic
+  question.
 - **One broken environment must not stop the others.** `Store.Reseal` and the
   agent's `Once` both isolate per-environment failures: the failed environment
   keeps its last good version and is reported, while the rest converge. Refusing

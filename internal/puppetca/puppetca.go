@@ -175,8 +175,18 @@ func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) 
 		return nil, nil, err
 	}
 
+	// The publisher always admits its own certname. An operator reading the
+	// fleet view from the node the publisher runs on has that node's key in
+	// hand already, so requiring it to be listed would only be a step to forget
+	// — and a node presenting its own certificate to its own listener is not a
+	// peer being trusted, it is the same trust boundary on both ends.
+	certnames := policy.AllowedCertnames
+	if p.CertName != "" {
+		certnames = append(append([]string(nil), certnames...), p.CertName)
+	}
+
 	var rev *Revocation
-	verify := VerifyConnectionIdentity(policy.AllowedRoles, policy.AllowedCertnames)
+	verify := VerifyConnectionIdentity(policy.AllowedRoles, certnames)
 	if mode != RevocationDisabled {
 		// PE points ssl-crl-path at $ssldir/crl.pem on every service listener;
 		// this is the same file.

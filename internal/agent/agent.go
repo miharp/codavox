@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -109,6 +110,7 @@ func (a *Agent) Once(ctx context.Context) error {
 	}
 
 	var failures []string
+	var moved bool
 	for env, codeID := range want {
 		changed, err := a.sync(ctx, env, codeID)
 		if err != nil {
@@ -118,6 +120,7 @@ func (a *Agent) Once(ctx context.Context) error {
 			continue
 		}
 		if changed {
+			moved = true
 			a.cfg.Logger.Info("environment updated", "environment", env, "code_id", codeID)
 		}
 		if err := a.reap(env, codeID); err != nil {
@@ -130,7 +133,23 @@ func (a *Agent) Once(ctx context.Context) error {
 	// It is independent of per-environment sync failures: a failed sync leaves
 	// the environment in want, so it is never a prune candidate.
 	if a.cfg.Prune {
-		a.prune(want)
+		if a.prune(want) {
+			moved = true
+		}
+	}
+
+	// Tell the publisher what this node now serves, rather than leaving it to
+	// be noticed on the next poll. The poll above reported the state *before*
+	// this reconciliation, so without this the fleet view would trail every
+	// deploy by a full interval — long enough for an operator watching a deploy
+	// land to read it as a compiler that had not converged.
+	//
+	// It costs one request, and only when something actually changed. The
+	// steady state — a converged compiler polling and finding nothing to do —
+	// adds nothing, and it goes down the keep-alive connection the poll just
+	// used.
+	if moved {
+		a.reportServing(ctx)
 	}
 
 	if len(failures) > 0 {
@@ -140,10 +159,52 @@ func (a *Agent) Once(ctx context.Context) error {
 	return nil
 }
 
+// reportServing re-states what this node serves, immediately after converging.
+//
+// It repeats the poll rather than using an endpoint of its own: the publisher
+// already reads the report from any poll, so a second API to maintain would buy
+// nothing. The response is discarded — this call exists for its header.
+//
+// Failure is ignored and not even logged at error level. The next poll carries
+// the same report, so the only cost of a failed one is the lag this exists to
+// remove.
+func (a *Agent) reportServing(ctx context.Context) {
+	serving := a.serving()
+	if serving == "" {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.BaseURL+publish.EnvironmentsPath, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set(publish.ServingHeader, serving)
+
+	resp, err := a.cfg.Client.Do(req)
+	if err != nil {
+		a.cfg.Logger.Debug("reporting deployed versions failed", "error", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// Drain so the connection returns to the pool for the next poll.
+	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
 func (a *Agent) fetchEnvironments(ctx context.Context) (map[string]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.BaseURL+publish.EnvironmentsPath, nil)
 	if err != nil {
 		return nil, err
+	}
+	// Report what this compiler is actually serving, read from the same symlinks
+	// code-id reads. The publisher can otherwise only infer convergence from
+	// what it saw a node fetch, which is not the same claim: an agent that
+	// fetched an artifact may still have failed to verify or unpack it.
+	//
+	// It rides along on a poll the agent already makes, so no compiler needs a
+	// listener and every connection stays outbound. This one describes the
+	// state before this reconciliation; reportServing follows up if it changes
+	// anything.
+	if serving := a.serving(); serving != "" {
+		req.Header.Set(publish.ServingHeader, serving)
 	}
 	resp, err := a.cfg.Client.Do(req)
 	if err != nil {
@@ -160,6 +221,32 @@ func (a *Agent) fetchEnvironments(ctx context.Context) (map[string]string, error
 		return nil, fmt.Errorf("decoding environment list: %w", err)
 	}
 	return envs, nil
+}
+
+// serving renders what this node currently serves, as the publisher's header
+// expects. Best effort throughout: an unreadable link is simply omitted, since
+// failing a poll over a diagnostic would trade a working deploy for a report.
+func (a *Agent) serving() string {
+	envs, err := a.localEnvironments()
+	if err != nil || len(envs) == 0 {
+		return ""
+	}
+	sort.Strings(envs)
+
+	var b strings.Builder
+	for _, env := range envs {
+		id, err := a.cfg.Layout.CurrentCodeID(env)
+		if err != nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(env)
+		b.WriteByte('=')
+		b.WriteString(id)
+	}
+	return b.String()
 }
 
 // sync converges one environment, reporting whether anything changed.
@@ -368,24 +455,30 @@ func (a *Agent) reapVersions(env, current string, keep int) error {
 // environments is far more likely misconfigured, or pointed at an empty staging
 // directory, than deliberately deleting every environment at once. Deleting the
 // last environment stays a manual action.
-func (a *Agent) prune(want map[string]string) {
+// It reports whether it removed anything, so the caller can re-state what this
+// node serves — a pruned environment leaves the set the agent reports.
+func (a *Agent) prune(want map[string]string) bool {
 	if len(want) == 0 {
 		a.cfg.Logger.Warn("publisher advertised no environments; skipping prune")
-		return
+		return false
 	}
 	local, err := a.localEnvironments()
 	if err != nil {
 		a.cfg.Logger.Warn("listing local environments failed; skipping prune", "error", err)
-		return
+		return false
 	}
+	var removed bool
 	for _, env := range local {
 		if _, kept := want[env]; kept {
 			continue
 		}
 		if err := a.pruneEnvironment(env); err != nil {
 			a.cfg.Logger.Warn("pruning environment failed", "environment", env, "error", err)
+			continue
 		}
+		removed = true
 	}
+	return removed
 }
 
 // localEnvironments lists the environments deployed on this node — the symlinks
