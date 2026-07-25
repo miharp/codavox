@@ -120,6 +120,18 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
 
+release:
+  # Every release so far is a pre-release, and saying so explicitly keeps that a
+  # decision rather than a side effect of the version string: goreleaser infers
+  # it from a suffix, so v0.3.0 published as a full latest release purely
+  # because "0.3.0" has none. While the README still says early development —
+  # no package repository, 0.x versions, an on-disk layout that may change —
+  # this should not quietly flip on the first tag without a suffix.
+  #
+  # Set this to false, or delete the section for suffix-based inference, when
+  # the project is ready to call a release stable.
+  prerelease: true
+
 changelog:
   # GitHub's native release-note generation produces a clean "What's Changed"
   # list from the merged pull requests — with links and contributors — rather
