@@ -14,6 +14,12 @@ WEBHOOK_SECRET="${WEBHOOK_SECRET:-integration-secret}"
 echo "[primary] configuring puppetserver as the CA"
 puppet config set --section main certname primary
 puppet config set --section main dns_alt_names primary,puppet
+# Point the node at itself. Without this, `server` stays at its default of
+# "puppet", which does not resolve on this network — and `puppetserver ca`
+# talks to the CA over HTTPS at that name, so revoking a certificate fails with
+# a DNS error rather than anything about certificates. A real primary has this
+# set; the harness only got away without it because nothing used the CA API.
+puppet config set --section main server primary
 # Autosign in this throwaway CA so the compiler enrolls without a manual sign.
 echo '*' > /etc/puppetlabs/puppet/autosign.conf
 

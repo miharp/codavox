@@ -137,9 +137,15 @@ type ServerPolicy struct {
 // caller, because verifying against the CA alone admits every node in the
 // estate — each one holds an agent certificate from the same authority, and a
 // revoked one keeps holding it.
-func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, error) {
+//
+// The returned Revocation is the same check, callable per request. The caller
+// must apply it: a handshake happens once per connection, and an HTTP client
+// with keep-alive will reuse that connection long after a certificate has been
+// revoked. It is nil only when revocation is disabled, and Check tolerates a
+// nil receiver so it can be wired in unconditionally.
+func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) {
 	if len(policy.AllowedRoles) == 0 {
-		return nil, errors.New("at least one allowed pp_role is required")
+		return nil, nil, errors.New("at least one allowed pp_role is required")
 	}
 	mode := policy.Revocation
 	if mode == "" {
@@ -148,18 +154,22 @@ func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, error) {
 
 	cert, pool, cas, err := p.load()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	var rev *Revocation
 	verify := VerifyConnectionRole(policy.AllowedRoles...)
 	if mode != RevocationDisabled {
 		// PE points ssl-crl-path at $ssldir/crl.pem on every service listener;
 		// this is the same file.
 		crl, err := newCRLChecker(p.CRL(), cas)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		verify = chainVerifiers(verify, revocationVerifier(crl, mode))
+		rev = &Revocation{crl: crl, mode: mode}
+		verify = chainVerifiers(verify, func(cs tls.ConnectionState) error {
+			return rev.Check(&cs)
+		})
 	}
 
 	return &tls.Config{
@@ -169,24 +179,9 @@ func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, error) {
 		MinVersion:   tls.VersionTLS12,
 		// VerifyConnection, not VerifyPeerCertificate: the latter is skipped
 		// entirely on resumed sessions, so a peer that handshook once could
-		// keep reconnecting without the role or the CRL ever being rechecked.
-		// Revocation especially must not be a one-time check.
+		// keep reconnecting without the role ever being rechecked.
 		VerifyConnection: verify,
-	}, nil
-}
-
-// revocationVerifier rejects a peer whose certificate is on the CRL.
-func revocationVerifier(crl *crlChecker, mode RevocationMode) func(tls.ConnectionState) error {
-	return func(cs tls.ConnectionState) error {
-		if len(cs.PeerCertificates) == 0 {
-			return errors.New("no peer certificate presented")
-		}
-		certs := cs.PeerCertificates
-		if mode == RevocationLeaf {
-			certs = certs[:1]
-		}
-		return crl.check(certs)
-	}
+	}, rev, nil
 }
 
 // chainVerifiers runs each check in order, stopping at the first failure.

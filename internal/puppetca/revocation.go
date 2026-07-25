@@ -1,6 +1,7 @@
 package puppetca
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -52,6 +53,43 @@ func ParseRevocationMode(s string) (RevocationMode, error) {
 // ErrCertificateRevoked means the peer authenticated against the CA but its
 // certificate appears on the CRL.
 var ErrCertificateRevoked = errors.New("peer certificate is revoked")
+
+// Revocation checks a live connection's peer against the CRL.
+//
+// It is a separate, callable guard because a TLS handshake is not the only
+// moment revocation matters. VerifyConnection runs when a connection is
+// established or resumed, but an HTTP client holding a keep-alive connection
+// never handshakes again — and a compiler polling every 30 seconds keeps one
+// warm indefinitely. Checking only at handshake leaves a revoked compiler with
+// access for as long as it keeps talking, which is precisely the node that will
+// keep talking.
+//
+// The publisher therefore also calls this per request. The cost is a stat and a
+// map lookup, against a poll every 30 seconds.
+type Revocation struct {
+	crl  *crlChecker
+	mode RevocationMode
+}
+
+// Check reports whether a connection's peer is still permitted.
+//
+// A nil receiver means revocation is disabled, so a caller can wire it in
+// unconditionally. A connection with no peer certificate is refused rather than
+// waved through: this guard is only used where mutual TLS is already required,
+// so its absence means something is wrong, not that there is nothing to check.
+func (r *Revocation) Check(cs *tls.ConnectionState) error {
+	if r == nil || r.mode == RevocationDisabled {
+		return nil
+	}
+	if cs == nil || len(cs.PeerCertificates) == 0 {
+		return errors.New("no peer certificate presented")
+	}
+	certs := cs.PeerCertificates
+	if r.mode == RevocationLeaf {
+		certs = certs[:1]
+	}
+	return r.crl.check(certs)
+}
 
 // crlChecker answers "is this certificate revoked?" from the Puppet CA's CRL.
 //

@@ -260,8 +260,18 @@ func (s *Store) Artifact(env, codeID string) (string, bool) {
 	return v.artifact, true
 }
 
-// Handler routes the publisher's HTTP API.
-func Handler(s *Store) http.Handler {
+// PeerCheck re-validates a request's peer. It is applied per request rather
+// than only at handshake, and returns an error to refuse the request.
+//
+// It is a function rather than a concrete type so publish does not depend on
+// how the peer is judged — the publisher's job is to apply the check on every
+// request, not to know that it is a CRL lookup.
+type PeerCheck func(*tls.ConnectionState) error
+
+// Handler routes the publisher's HTTP API, applying check to every request.
+//
+// A nil check disables it, which is what a plaintext test server wants.
+func Handler(s *Store, check PeerCheck) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/environments", s.handleEnvironments)
 	mux.HandleFunc("GET /v1/artifact/{env}/{codeID}", s.handleArtifact)
@@ -269,7 +279,31 @@ func Handler(s *Store) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
-	return mux
+	if check == nil {
+		return mux
+	}
+	return guardPeer(mux, check)
+}
+
+// guardPeer re-checks the peer on every request.
+//
+// TLS verification runs once per connection. An agent polls over a keep-alive
+// connection every 30 seconds and never handshakes again, so a certificate
+// revoked after that first handshake would go on being served until the
+// connection happened to drop — on the one node an operator most wants cut off.
+// Checking here closes that window to a single request.
+func guardPeer(next http.Handler, check PeerCheck) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := check(r.TLS); err != nil {
+			// 403, not 401: the peer authenticated fine, it is simply no longer
+			// allowed. Naming it makes the publisher's log answer "why did that
+			// compiler stop updating?" without a packet capture.
+			fmt.Fprintf(os.Stderr, "refusing %s: %v\n", r.URL.Path, err)
+			http.Error(w, "peer is not permitted", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Store) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
@@ -332,6 +366,10 @@ type Server struct {
 	Addr      string
 	Store     *Store
 	TLSConfig *tls.Config
+	// PeerCheck re-validates the peer on every request. TLSConfig only judges a
+	// peer when a connection is established, which a keep-alive client does once
+	// and then never again.
+	PeerCheck PeerCheck
 }
 
 // Serve runs until ctx is cancelled, then shuts down gracefully.
@@ -342,7 +380,7 @@ type Server struct {
 func (srv *Server) Serve(ctx context.Context) error {
 	s := &http.Server{
 		Addr:      srv.Addr,
-		Handler:   Handler(srv.Store),
+		Handler:   Handler(srv.Store, srv.PeerCheck),
 		TLSConfig: srv.TLSConfig,
 		// A compiler that stalls mid-request must not hold a connection open
 		// indefinitely; the publisher serves the whole estate.

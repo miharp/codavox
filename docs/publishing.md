@@ -65,12 +65,16 @@ every service listener and leaves puppetserver on puppet.conf's
 | `leaf` | check only the peer's own certificate. |
 | `false` | skip the CRL entirely. |
 
-Two properties follow from how it is implemented, and both are deliberate:
+Three properties follow from how it is implemented, and all are deliberate:
 
-- **The CRL is re-read when it changes**, checked by a stat per handshake.
-  Revoking a compiler is incident response, so
-  `puppetserver ca revoke --certname compiler02.example.com` takes effect
-  without restarting any publisher.
+- **The CRL is re-read when it changes**, and checked **on every request**, not
+  only when a connection is established. That distinction is the whole point: an
+  agent polls over one keep-alive connection and never handshakes again, so a
+  handshake-only check would keep serving a compiler revoked minutes ago until
+  its connection happened to drop — on precisely the node you are trying to cut
+  off. Revoking with
+  `puppetserver ca revoke --certname compiler02.example.com` takes effect on
+  that compiler's next poll, with no restart of anything.
 - **A missing or unverifiable CRL is a startup error**, not a silent downgrade
   to "nothing is revoked". The CRL's signature is checked against the CA
   bundle, so a CRL written by anyone other than your CA is refused rather than
