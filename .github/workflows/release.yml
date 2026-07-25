@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version-file: 'go.mod'
 
       # A tag that fails its own tests is worse than a missing release, and a
       # tag push cannot be un-published cleanly.
