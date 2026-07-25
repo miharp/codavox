@@ -41,12 +41,14 @@ func New(t *testing.T) *CA {
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Puppet CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "Puppet CA"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		IsCA:         true,
+		// crlSign is what a real Puppet CA carries, and without it Go refuses to
+		// verify a CRL this CA signed.
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
@@ -135,6 +137,11 @@ func (ca *CA) PEM() []byte {
 
 // SSLDir lays out a node's SSL material at Puppet's standard paths and returns
 // the directory and certname.
+//
+// It includes an empty crl.pem, because a real Puppet ssldir always has one:
+// the agent run that enrolls a node fetches the CA's CRL alongside its
+// certificate. Omitting it here would let revocation checking pass tests it
+// would fail on a real node.
 func (ca *CA) SSLDir(t *testing.T, certname, role string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -156,5 +163,67 @@ func (ca *CA) SSLDir(t *testing.T, certname, role string) string {
 	write(filepath.Join(dir, "private_keys", certname+".pem"), keyPEM)
 	write(filepath.Join(dir, "certs", "ca.pem"), ca.PEM())
 
+	ca.WriteCRL(t, dir)
+
 	return dir
+}
+
+// CRL returns a signed, PEM-encoded revocation list naming the given
+// certificates.
+func (ca *CA) CRL(t *testing.T, revoked ...*x509.Certificate) []byte {
+	t.Helper()
+
+	entries := make([]x509.RevocationListEntry, 0, len(revoked))
+	for _, cert := range revoked {
+		entries = append(entries, x509.RevocationListEntry{
+			SerialNumber:   cert.SerialNumber,
+			RevocationTime: time.Now().Add(-time.Minute),
+		})
+	}
+
+	tmpl := &x509.RevocationList{
+		Number:                    big.NewInt(time.Now().UnixNano()),
+		ThisUpdate:                time.Now().Add(-time.Minute),
+		NextUpdate:                time.Now().Add(24 * time.Hour),
+		RevokedCertificateEntries: entries,
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, tmpl, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
+}
+
+// WriteCRL installs a CRL at a node's crl.pem, replacing any existing one. A
+// test revokes a compiler by calling this on the publisher's ssldir.
+func (ca *CA) WriteCRL(t *testing.T, ssldir string, revoked ...*x509.Certificate) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(ssldir, "crl.pem"), ca.CRL(t, revoked...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ParseCert decodes a PEM certificate, for tests that need a serial number to
+// revoke.
+func ParseCert(t *testing.T, certPEM []byte) *x509.Certificate {
+	t.Helper()
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		t.Fatal("no PEM block in certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// CertFor reads the certificate a node was issued in its ssldir.
+func CertFor(t *testing.T, ssldir, certname string) *x509.Certificate {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(ssldir, "certs", certname+".pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ParseCert(t, b)
 }

@@ -19,6 +19,11 @@ r10k_config: /etc/puppetlabs/r10k/r10k.yaml
 publish:
   listen: ":8150"
   allow_roles: [openvox_compiler]
+  # Refuse revoked certificates, read from <ssldir>/crl.pem — the same file
+  # every other Puppet service checks. Takes Puppet's own values: chain (the
+  # default), leaf, or false. Set it to false only if your estate distributes
+  # no CRL; a revoked compiler then keeps its access until its cert expires.
+  certificate_revocation: chain
 
 deploy_server:
   listen: ":8170"

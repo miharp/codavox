@@ -56,6 +56,10 @@ second compiler if you want that shape too.
    environment, is a **hard error** — never a plausible-but-wrong answer.
 6. **Prune.** The agent **reaps old version directories** rather than letting
    them accumulate.
+7. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
+   off its access to code** — with no restart of the publisher, and while the
+   certificate is still cryptographically valid and still carries its `pp_role`.
+   Runs last, because the compiler cannot fetch code afterwards.
 
 ## Files
 

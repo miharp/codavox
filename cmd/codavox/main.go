@@ -51,8 +51,10 @@ Usage:
 
   codavox publish --staging <dir> [--listen <addr>] [--certname <name>]
                   [--ssldir <dir>] [--allow-role <role>]
+                  [--certificate-revocation chain|leaf|false]
         Serve environment versions and artifacts to compilers over mutual TLS,
-        using the Puppet CA material already on this node.
+        using the Puppet CA material already on this node. Revoked certificates
+        are refused, from the same crl.pem every other Puppet service reads.
 
   codavox agent --publisher <url> [--interval <dur>] [--once]
                 [--certname <name>] [--ssldir <dir>] [--environmentpath <dir>]
@@ -272,12 +274,13 @@ func sealTree(args []string) error {
 // would create a second trust root to rotate and revoke.
 func publishServe(args []string) error {
 	opts := struct {
-		staging  string
-		listen   string
-		certname string
-		ssldir   string
-		state    string
-		roles    []string
+		staging    string
+		listen     string
+		certname   string
+		ssldir     string
+		state      string
+		revocation string
+		roles      []string
 	}{
 		listen: ":8150",
 		ssldir: puppetca.DefaultSSLDir,
@@ -293,6 +296,7 @@ func publishServe(args []string) error {
 	overlay(&opts.ssldir, cfg.SSLDir)
 	overlay(&opts.certname, cfg.Certname)
 	overlay(&opts.listen, cfg.Publish.Listen)
+	overlay(&opts.revocation, cfg.Publish.CertificateRevocation)
 	if len(cfg.Publish.AllowRoles) > 0 {
 		opts.roles = cfg.Publish.AllowRoles
 	}
@@ -324,6 +328,8 @@ func publishServe(args []string) error {
 			if r, err = next(); err == nil {
 				opts.roles = append(opts.roles, r)
 			}
+		case "--certificate-revocation":
+			opts.revocation, err = next()
 		default:
 			return fmt.Errorf("unknown argument %q", args[i])
 		}
@@ -346,8 +352,16 @@ func publishServe(args []string) error {
 		opts.roles = []string{"openvox_compiler"}
 	}
 
+	revocation, err := puppetca.ParseRevocationMode(opts.revocation)
+	if err != nil {
+		return err
+	}
+
 	paths := puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}
-	tlsConfig, err := paths.ServerTLS(opts.roles...)
+	tlsConfig, err := paths.ServerTLS(puppetca.ServerPolicy{
+		AllowedRoles: opts.roles,
+		Revocation:   revocation,
+	})
 	if err != nil {
 		return err
 	}
@@ -367,8 +381,8 @@ func publishServe(args []string) error {
 	for env, id := range store.Environments() {
 		fmt.Fprintf(os.Stderr, "sealed %s %s\n", env, id)
 	}
-	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s)\n",
-		opts.listen, opts.certname, strings.Join(opts.roles, ", "))
+	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s, revocation: %s)\n",
+		opts.listen, opts.certname, strings.Join(opts.roles, ", "), revocation)
 
 	// Record the pid so a deploy can signal this publisher to reseal.
 	pidPath := publish.PidFilePath(opts.state)
