@@ -16,6 +16,8 @@ r10k_config: /etc/puppetlabs/r10k/r10k.yaml
 publish:
   listen: ":8150"
   allow_roles: [openvox_compiler]
+  # For compilers whose certificates predate codavox and carry no pp_role.
+  allow_certnames: []
   certificate_revocation: chain
 
 deploy_server:
@@ -72,6 +74,7 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | `r10k_config` | deploy, deploy-server | `--r10k-config` |
 | `publish.listen` | publish | `--listen` |
 | `publish.allow_roles` | publish | `--allow-role` |
+| `publish.allow_certnames` | publish | `--allow-certname` |
 | `publish.certificate_revocation` | publish | `--certificate-revocation` |
 | `deploy_server.listen` | deploy-server | `--listen` |
 | `deploy_server.api_token` | deploy-server | `--api-token` |

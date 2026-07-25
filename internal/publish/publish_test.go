@@ -453,7 +453,7 @@ func TestRevocationAppliesToAnOpenConnection(t *testing.T) {
 		ClientCAs:        ca.Pool(t),
 		ClientAuth:       tls.RequireAndVerifyClientCert,
 		MinVersion:       tls.VersionTLS12,
-		VerifyConnection: puppetca.VerifyConnectionRole("openvox_compiler"),
+		VerifyConnection: puppetca.VerifyConnectionIdentity([]string{"openvox_compiler"}, nil),
 	}
 	srv.StartTLS()
 	defer srv.Close()
@@ -511,7 +511,7 @@ func TestMutualTLSEnforcesRole(t *testing.T) {
 		ClientCAs:        ca.Pool(t),
 		ClientAuth:       tls.RequireAndVerifyClientCert,
 		MinVersion:       tls.VersionTLS12,
-		VerifyConnection: puppetca.VerifyConnectionRole("openvox_compiler"),
+		VerifyConnection: puppetca.VerifyConnectionIdentity([]string{"openvox_compiler"}, nil),
 	}
 	srv.StartTLS()
 	defer srv.Close()

@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/miharp/codavox/internal/testca"
@@ -123,9 +124,9 @@ func TestPPRole(t *testing.T) {
 // Authentication by CA alone is not enough: every agent in the estate holds a
 // certificate from the same CA, and Puppet manifests routinely reference
 // internal hostnames, credential paths, and topology.
-func TestVerifyConnectionRole(t *testing.T) {
+func TestVerifyConnectionIdentity(t *testing.T) {
 	ca := testca.New(t)
-	verify := VerifyConnectionRole("openvox_compiler", "openvox_server")
+	verify := VerifyConnectionIdentity([]string{"openvox_compiler", "openvox_server"}, nil)
 
 	stateFor := func(t *testing.T, certPEM []byte) tls.ConnectionState {
 		t.Helper()
@@ -150,15 +151,15 @@ func TestVerifyConnectionRole(t *testing.T) {
 		if err == nil {
 			t.Fatal("an agent with an unrelated role was admitted")
 		}
-		if !errors.Is(err, ErrRoleMismatch) {
-			t.Errorf("got %v, want ErrRoleMismatch", err)
+		if !errors.Is(err, ErrNotAuthorized) {
+			t.Errorf("got %v, want ErrNotAuthorized", err)
 		}
 	})
 
 	t.Run("certificate without pp_role is refused", func(t *testing.T) {
 		certPEM, _ := ca.Issue(t, "plain.example.com", "", false)
-		if err := verify(stateFor(t, certPEM)); !errors.Is(err, ErrRoleMismatch) {
-			t.Errorf("got %v, want ErrRoleMismatch", err)
+		if err := verify(stateFor(t, certPEM)); !errors.Is(err, ErrNotAuthorized) {
+			t.Errorf("got %v, want ErrNotAuthorized", err)
 		}
 	})
 
@@ -167,6 +168,107 @@ func TestVerifyConnectionRole(t *testing.T) {
 			t.Error("expected an error when no certificate is presented")
 		}
 	})
+}
+
+// The brownfield path: an estate whose compilers were enrolled long before
+// anyone had heard of codavox has no pp_role on any certificate, and adding one
+// means re-issuing every certificate. Naming them admits them today.
+func TestVerifyConnectionIdentityByCertname(t *testing.T) {
+	ca := testca.New(t)
+
+	stateFor := func(t *testing.T, certPEM []byte) tls.ConnectionState {
+		t.Helper()
+		block, _ := pem.Decode(certPEM)
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	}
+
+	t.Run("named certname is admitted without any pp_role", func(t *testing.T) {
+		verify := VerifyConnectionIdentity(nil, []string{"old-compiler.example.com"})
+		certPEM, _ := ca.Issue(t, "old-compiler.example.com", "", false)
+		if err := verify(stateFor(t, certPEM)); err != nil {
+			t.Errorf("named certname rejected: %v", err)
+		}
+	})
+
+	t.Run("an unnamed node is still refused", func(t *testing.T) {
+		verify := VerifyConnectionIdentity(nil, []string{"old-compiler.example.com"})
+		certPEM, _ := ca.Issue(t, "web01.example.com", "", false)
+		if err := verify(stateFor(t, certPEM)); !errors.Is(err, ErrNotAuthorized) {
+			t.Errorf("got %v, want ErrNotAuthorized", err)
+		}
+	})
+
+	// The migration state: some certificates re-issued with a role, the rest
+	// still named. Both have to work at once or the estate cannot move
+	// incrementally, which is the whole point.
+	t.Run("roles and certnames both admit", func(t *testing.T) {
+		verify := VerifyConnectionIdentity([]string{"openvox_compiler"}, []string{"old-compiler.example.com"})
+
+		reissued, _ := ca.Issue(t, "new-compiler.example.com", "openvox_compiler", false)
+		if err := verify(stateFor(t, reissued)); err != nil {
+			t.Errorf("re-issued compiler rejected: %v", err)
+		}
+
+		legacy, _ := ca.Issue(t, "old-compiler.example.com", "", false)
+		if err := verify(stateFor(t, legacy)); err != nil {
+			t.Errorf("legacy compiler rejected: %v", err)
+		}
+
+		other, _ := ca.Issue(t, "web01.example.com", "webserver", false)
+		if err := verify(stateFor(t, other)); !errors.Is(err, ErrNotAuthorized) {
+			t.Errorf("unrelated node admitted: %v", err)
+		}
+	})
+
+	// Exact match only. A certname allowlist that matched loosely would be a
+	// quiet way to admit more than was written down.
+	t.Run("matching is exact", func(t *testing.T) {
+		verify := VerifyConnectionIdentity(nil, []string{"compiler.example.com"})
+		for _, cn := range []string{
+			"compiler.example.com.attacker.net",
+			"evil-compiler.example.com",
+			"compiler.example.co",
+		} {
+			certPEM, _ := ca.Issue(t, cn, "", false)
+			if err := verify(stateFor(t, certPEM)); !errors.Is(err, ErrNotAuthorized) {
+				t.Errorf("%q was admitted by a %q allowlist", cn, "compiler.example.com")
+			}
+		}
+	})
+
+	// The error has to say which check failed, or an operator cannot tell a
+	// missing pp_role from a wrong one without inspecting the certificate.
+	t.Run("the refusal says why", func(t *testing.T) {
+		verify := VerifyConnectionIdentity([]string{"openvox_compiler"}, nil)
+
+		none, _ := ca.Issue(t, "plain.example.com", "", false)
+		if err := verify(stateFor(t, none)); err == nil || !strings.Contains(err.Error(), "carries no pp_role") {
+			t.Errorf("missing-role error unhelpful: %v", err)
+		}
+
+		wrong, _ := ca.Issue(t, "web01.example.com", "webserver", false)
+		if err := verify(stateFor(t, wrong)); err == nil || !strings.Contains(err.Error(), `pp_role "webserver"`) {
+			t.Errorf("wrong-role error does not name the role: %v", err)
+		}
+	})
+}
+
+// Authorizing nobody would admit every node the CA ever signed, so it has to be
+// refused at construction rather than discovered in production.
+func TestServerTLSRequiresAnAllowlist(t *testing.T) {
+	ca := testca.New(t)
+	p := Paths{SSLDir: ca.SSLDir(t, "puppet.example.com", "openvox_server"), CertName: "puppet.example.com"}
+
+	if _, _, err := p.ServerTLS(ServerPolicy{}); err == nil {
+		t.Error("ServerTLS with neither roles nor certnames should fail rather than admit everything")
+	}
+	if _, _, err := p.ServerTLS(ServerPolicy{AllowedCertnames: []string{"compiler.example.com"}}); err != nil {
+		t.Errorf("certnames alone should be a valid allowlist: %v", err)
+	}
 }
 
 func TestServerTLSRequiresARole(t *testing.T) {

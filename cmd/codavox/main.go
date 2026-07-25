@@ -50,7 +50,7 @@ Usage:
         deterministic artifact.
 
   codavox publish --staging <dir> [--listen <addr>] [--certname <name>]
-                  [--ssldir <dir>] [--allow-role <role>]
+                  [--ssldir <dir>] [--allow-role <role>] [--allow-certname <cn>]
                   [--certificate-revocation chain|leaf|false]
         Serve environment versions and artifacts to compilers over mutual TLS,
         using the Puppet CA material already on this node. Revoked certificates
@@ -281,6 +281,7 @@ func publishServe(args []string) error {
 		state      string
 		revocation string
 		roles      []string
+		certnames  []string
 	}{
 		listen: ":8150",
 		ssldir: puppetca.DefaultSSLDir,
@@ -299,6 +300,9 @@ func publishServe(args []string) error {
 	overlay(&opts.revocation, cfg.Publish.CertificateRevocation)
 	if len(cfg.Publish.AllowRoles) > 0 {
 		opts.roles = cfg.Publish.AllowRoles
+	}
+	if len(cfg.Publish.AllowCertnames) > 0 {
+		opts.certnames = cfg.Publish.AllowCertnames
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -328,6 +332,11 @@ func publishServe(args []string) error {
 			if r, err = next(); err == nil {
 				opts.roles = append(opts.roles, r)
 			}
+		case "--allow-certname":
+			var c string
+			if c, err = next(); err == nil {
+				opts.certnames = append(opts.certnames, c)
+			}
 		case "--certificate-revocation":
 			opts.revocation, err = next()
 		default:
@@ -348,7 +357,10 @@ func publishServe(args []string) error {
 		}
 		opts.certname = hostname
 	}
-	if len(opts.roles) == 0 {
+	// Only default the role when nothing else authorizes anyone: an operator who
+	// listed certnames deliberately should not silently also admit a whole class
+	// of nodes.
+	if len(opts.roles) == 0 && len(opts.certnames) == 0 {
 		opts.roles = []string{"openvox_compiler"}
 	}
 
@@ -359,8 +371,9 @@ func publishServe(args []string) error {
 
 	paths := puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}
 	tlsConfig, rev, err := paths.ServerTLS(puppetca.ServerPolicy{
-		AllowedRoles: opts.roles,
-		Revocation:   revocation,
+		AllowedRoles:     opts.roles,
+		AllowedCertnames: opts.certnames,
+		Revocation:       revocation,
 	})
 	if err != nil {
 		return err
@@ -388,8 +401,9 @@ func publishServe(args []string) error {
 	for env, id := range store.Environments() {
 		fmt.Fprintf(os.Stderr, "sealed %s %s\n", env, id)
 	}
-	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s, revocation: %s)\n",
-		opts.listen, opts.certname, strings.Join(opts.roles, ", "), revocation)
+	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s, certnames: %s, revocation: %s)\n",
+		opts.listen, opts.certname,
+		joinOrNone(opts.roles), joinOrNone(opts.certnames), revocation)
 
 	// Record the pid so a deploy can signal this publisher to reseal.
 	pidPath := publish.PidFilePath(opts.state)
@@ -906,6 +920,15 @@ func deployServerRoles(apiToken, secret []byte) string {
 	default:
 		return "webhook"
 	}
+}
+
+// joinOrNone renders a list for the startup line, so an empty one reads as a
+// deliberate "none" rather than a blank the operator has to interpret.
+func joinOrNone(v []string) string {
+	if len(v) == 0 {
+		return "none"
+	}
+	return strings.Join(v, ", ")
 }
 
 // provenanceFile is the publisher's provenance log, relative to the state dir.

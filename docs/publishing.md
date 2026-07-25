@@ -9,7 +9,7 @@ codavox publish --staging /etc/puppetlabs/code-staging
 
 ```text
 sealed production 3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb
-listening on :8150 as puppet.example.com (roles: openvox_compiler)
+listening on :8150 as puppet.example.com (roles: openvox_compiler, certnames: none, revocation: chain)
 ```
 
 ## Options
@@ -21,6 +21,7 @@ listening on :8150 as puppet.example.com (roles: openvox_compiler)
 | `--certname` | system hostname | Node's Puppet certname |
 | `--ssldir` | `/etc/puppetlabs/puppet/ssl` | Puppet SSL directory |
 | `--allow-role` | `openvox_compiler` | `pp_role` permitted to fetch code; repeatable |
+| `--allow-certname` | none | Certname permitted to fetch code, matched exactly; repeatable |
 | `--state` | `<root>/state` | Directory for the provenance log and materialized artifacts |
 
 **codavox stages nothing.** It reads a directory r10k already populated.
@@ -100,8 +101,38 @@ That distinction matters: **`VerifyPeerCertificate` is skipped entirely on
 resumed sessions**, so a peer that completed one handshake could keep
 reconnecting without the role ever being rechecked.
 
-`ServerTLS` refuses to build a configuration with no allowed roles, so the
+`ServerTLS` refuses to build a configuration that authorizes nobody, so the
 constraint cannot be omitted by accident.
+
+### Estates whose certificates predate codavox
+
+`pp_role` is an X.509 extension fixed when a certificate is issued. A compiler
+enrolled before anyone had heard of codavox cannot be given one without
+re-issuing its certificate — revoke, clean, re-enrol, restart — for every
+compiler. That is a PKI operation to demand before you can try codavox at all.
+
+So the publisher also authorizes by certname:
+
+```yaml
+publish:
+  allow_certnames:
+    - compiler01.example.com
+    - compiler02.example.com
+```
+
+Either check admits, so an estate can move a node at a time: list the compilers
+you have today, and drop each from the list as its certificate is re-issued with
+a role. Matching is exact — no globs, no suffixes — because an allowlist that
+matched loosely would quietly admit more than was written in it.
+
+Naming certnames is not the weaker option it looks like: an explicit list of
+hosts is narrower than a class of them. It is simply per-node, so it does not
+scale to an estate that grows, which is why `pp_role` stays the better answer
+for anything newly enrolled.
+
+Setting `allow_certnames` and no roles means exactly that: no role admits
+anyone. The default of `openvox_compiler` applies only when neither is
+configured.
 
 ## API
 

@@ -43,6 +43,10 @@
 #   # every enrolled node in the estate has a certificate from the same CA.
 #   allow_roles: [openvox_compiler]
 #
+#   # Compilers authorized by certname instead, for certificates issued before
+#   # codavox existed and so carrying no pp_role. Either check admits.
+#   allow_certnames: []
+#
 #   # Refuse revoked certificates, read from <ssldir>/crl.pem. Puppet's own
 #   # values: chain (the default), leaf, or false. Set false only if your
 #   # estate distributes no CRL.

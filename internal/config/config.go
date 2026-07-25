@@ -43,6 +43,9 @@ type Config struct {
 	Publish struct {
 		Listen     string   `yaml:"listen"`
 		AllowRoles []string `yaml:"allow_roles"`
+		// AllowCertnames authorizes individual compilers by certname, for an
+		// estate whose certificates predate pp_role.
+		AllowCertnames []string `yaml:"allow_certnames"`
 		// CertificateRevocation takes Puppet's values — chain, leaf, or false —
 		// and defaults to chain, so it behaves like every other Puppet service.
 		CertificateRevocation string `yaml:"certificate_revocation"`
