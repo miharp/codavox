@@ -122,21 +122,39 @@ func parseCertificates(pemBytes []byte) ([]*x509.Certificate, error) {
 
 // ServerPolicy is who the publisher will admit.
 type ServerPolicy struct {
-	// AllowedRoles are the pp_role values permitted to fetch code. At least one
-	// is required.
+	// AllowedRoles are the pp_role values permitted to fetch code.
 	AllowedRoles []string
+	// AllowedCertnames are individual certificates permitted to fetch code,
+	// matched exactly against the certificate's common name.
+	//
+	// It exists for estates that already have compilers. pp_role is an X.509
+	// extension fixed when a certificate is issued, so a node enrolled before
+	// anyone had heard of codavox cannot be given one without re-issuing its
+	// certificate — revoke, clean, re-enrol, restart, for every compiler. That
+	// is a PKI operation to demand before someone can try this at all.
+	//
+	// Naming certnames is not the weaker option it looks like: an explicit list
+	// of hosts is narrower than a class of them. It is simply per-node, so it
+	// does not scale to an estate that grows, which is why pp_role remains the
+	// better answer for anything newly enrolled.
+	AllowedCertnames []string
 	// Revocation selects CRL checking. The zero value is RevocationChain,
 	// matching Puppet's certificate_revocation default.
 	Revocation RevocationMode
 }
 
 // ServerTLS builds a TLS configuration for the publisher, admitting only peers
-// whose certificate carries one of the allowed roles and is not revoked.
+// that are authorized and not revoked.
 //
-// Both constraints live in this constructor rather than being bolted on by the
-// caller, because verifying against the CA alone admits every node in the
-// estate — each one holds an agent certificate from the same authority, and a
-// revoked one keeps holding it.
+// A peer is authorized by carrying an allowed pp_role, or by being named in
+// AllowedCertnames. Either suffices, so an estate can move to roles a node at a
+// time rather than all at once. At least one of the two must be configured:
+// verifying against the CA alone admits every node in the estate, since each
+// one holds an agent certificate from the same authority.
+//
+// These constraints live in this constructor rather than being bolted on by the
+// caller, because a revoked or unauthorized peer must be refused before it can
+// ask for anything.
 //
 // The returned Revocation is the same check, callable per request. The caller
 // must apply it: a handshake happens once per connection, and an HTTP client
@@ -144,8 +162,8 @@ type ServerPolicy struct {
 // revoked. It is nil only when revocation is disabled, and Check tolerates a
 // nil receiver so it can be wired in unconditionally.
 func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) {
-	if len(policy.AllowedRoles) == 0 {
-		return nil, nil, errors.New("at least one allowed pp_role is required")
+	if len(policy.AllowedRoles) == 0 && len(policy.AllowedCertnames) == 0 {
+		return nil, nil, errors.New("at least one allowed pp_role or certname is required")
 	}
 	mode := policy.Revocation
 	if mode == "" {
@@ -158,7 +176,7 @@ func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) 
 	}
 
 	var rev *Revocation
-	verify := VerifyConnectionRole(policy.AllowedRoles...)
+	verify := VerifyConnectionIdentity(policy.AllowedRoles, policy.AllowedCertnames)
 	if mode != RevocationDisabled {
 		// PE points ssl-crl-path at $ssldir/crl.pem on every service listener;
 		// this is the same file.
@@ -229,23 +247,34 @@ func (p Paths) ClientTLS() (*tls.Config, error) {
 	}, nil
 }
 
-// ErrRoleMismatch means the peer authenticated but is not permitted.
-var ErrRoleMismatch = errors.New("peer certificate does not carry the required pp_role")
+// ErrNotAuthorized means the peer authenticated against the CA but is not
+// permitted to fetch code.
+var ErrNotAuthorized = errors.New("peer certificate is not authorized")
 
-// VerifyConnectionRole returns a VerifyConnection function admitting only
-// peers whose certificate carries one of the given pp_role values.
+// VerifyConnectionIdentity returns a VerifyConnection function admitting peers
+// that carry one of the allowed pp_role values, or whose certname is named
+// explicitly.
 //
 // Without this, any node with a Puppet agent certificate could fetch every
 // environment's code. A compromised leaf node should not be able to read the
 // whole estate's Puppet manifests, which routinely reference internal
 // hostnames, credential paths, and topology.
 //
+// The two are checked in that order and either admits, so an estate with
+// existing compilers can list them by name today and move to roles as
+// certificates are re-issued, rather than needing a PKI operation before
+// anything works at all.
+//
 // This runs on resumed connections as well as full handshakes, which is why it
 // is preferred over VerifyPeerCertificate.
-func VerifyConnectionRole(allowed ...string) func(tls.ConnectionState) error {
-	permitted := make(map[string]bool, len(allowed))
-	for _, r := range allowed {
-		permitted[r] = true
+func VerifyConnectionIdentity(allowedRoles, allowedCertnames []string) func(tls.ConnectionState) error {
+	roles := make(map[string]bool, len(allowedRoles))
+	for _, r := range allowedRoles {
+		roles[r] = true
+	}
+	certnames := make(map[string]bool, len(allowedCertnames))
+	for _, c := range allowedCertnames {
+		certnames[c] = true
 	}
 
 	return func(cs tls.ConnectionState) error {
@@ -253,17 +282,25 @@ func VerifyConnectionRole(allowed ...string) func(tls.ConnectionState) error {
 			return errors.New("no peer certificate presented")
 		}
 		// Chain verification has already happened against ClientCAs; this adds
-		// only the role constraint.
+		// only the authorization constraint.
 		cert := cs.PeerCertificates[0]
+		cn := cert.Subject.CommonName
 
-		role, ok := PPRole(cert)
-		if !ok {
-			return fmt.Errorf("%w: certificate for %q carries no pp_role", ErrRoleMismatch, cert.Subject.CommonName)
+		if certnames[cn] {
+			return nil
 		}
-		if !permitted[role] {
-			return fmt.Errorf("%w: %q has pp_role %q", ErrRoleMismatch, cert.Subject.CommonName, role)
+
+		role, hasRole := PPRole(cert)
+		if hasRole && roles[role] {
+			return nil
 		}
-		return nil
+
+		// Say which of the two failed, and with what, so an operator can tell a
+		// missing pp_role from a wrong one without inspecting the certificate.
+		if !hasRole {
+			return fmt.Errorf("%w: %q carries no pp_role and is not an allowed certname", ErrNotAuthorized, cn)
+		}
+		return fmt.Errorf("%w: %q has pp_role %q and is not an allowed certname", ErrNotAuthorized, cn, role)
 	}
 }
 

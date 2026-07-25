@@ -22,7 +22,10 @@ type publisher struct {
 	addr    string
 	ssldir  string
 	state   string
-	cmd     *exec.Cmd
+	// extra flags appended to the publish invocation, so a test can pin the
+	// authorization policy.
+	extra []string
+	cmd   *exec.Cmd
 }
 
 func (p *publisher) url() string { return "https://" + p.addr }
@@ -33,13 +36,14 @@ func (p *publisher) restart(t *testing.T) {
 	if p.state == "" {
 		p.state = t.TempDir()
 	}
-	cmd := exec.Command(p.bin, "publish",
+	args := append([]string{"publish",
 		"--staging", p.staging,
 		"--listen", p.addr,
 		"--certname", "puppet.example.com",
 		"--ssldir", p.ssldir,
 		"--state", p.state,
-	)
+	}, p.extra...)
+	cmd := exec.Command(p.bin, args...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

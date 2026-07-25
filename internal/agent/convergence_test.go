@@ -435,3 +435,70 @@ func TestRevokedCompilerLosesAccess(t *testing.T) {
 		t.Errorf("a revoked compiler received new code: %q", body)
 	}
 }
+
+// The brownfield case, end to end against a real publisher process.
+//
+// An estate that predates codavox has no pp_role on any certificate, and adding
+// one means re-issuing every compiler's: revoke, clean, re-enrol, restart. That
+// is a PKI operation to demand before anyone can try codavox at all, so naming
+// a certname has to be enough on its own.
+func TestCompilerWithoutRoleIsAdmittedByCertname(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary and binds a port")
+	}
+
+	bin := build(t)
+	ca := testca.New(t)
+
+	staging := t.TempDir()
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+
+	const addr = "127.0.0.1:18156"
+	pub := &publisher{
+		bin:     bin,
+		staging: staging,
+		addr:    addr,
+		ssldir:  ca.SSLDir(t, "puppet.example.com", "openvox_server"),
+		// No roles at all: this publisher authorizes purely by certname.
+		extra: []string{"--allow-certname", "legacy.example.com"},
+	}
+	pub.restart(t)
+	t.Cleanup(pub.stop)
+
+	// A certificate with no pp_role whatsoever, as a node enrolled years ago has.
+	base := t.TempDir()
+	legacy := compiler{
+		name:    "legacy.example.com",
+		ssldir:  ca.SSLDir(t, "legacy.example.com", ""),
+		root:    filepath.Join(base, "codavox"),
+		envPath: filepath.Join(base, "environments"),
+	}
+
+	var err error
+	for range 40 {
+		if err = legacy.syncOnce(t, bin, pub.url()); err == nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("a named compiler with no pp_role was refused: %v", err)
+	}
+
+	id, err := legacy.codeID(t, bin, "production")
+	if err != nil || id == "" {
+		t.Fatalf("code-id after sync: %q %v", id, err)
+	}
+
+	// Naming one node must not admit the rest of the estate.
+	other := t.TempDir()
+	unnamed := compiler{
+		name:    "other.example.com",
+		ssldir:  ca.SSLDir(t, "other.example.com", ""),
+		root:    filepath.Join(other, "codavox"),
+		envPath: filepath.Join(other, "environments"),
+	}
+	if err := unnamed.syncOnce(t, bin, pub.url()); err == nil {
+		t.Error("a node absent from the allowlist fetched code")
+	}
+}

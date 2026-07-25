@@ -19,6 +19,10 @@ r10k_config: /etc/puppetlabs/r10k/r10k.yaml
 publish:
   listen: ":8150"
   allow_roles: [openvox_compiler]
+  # Compilers authorized by certname instead, for certificates issued before
+  # codavox existed and so carrying no pp_role. Either check admits, so an
+  # estate can move to roles one re-issued certificate at a time.
+  allow_certnames: []
   # Refuse revoked certificates, read from <ssldir>/crl.pem — the same file
   # every other Puppet service checks. Takes Puppet's own values: chain (the
   # default), leaf, or false. Set it to false only if your estate distributes
