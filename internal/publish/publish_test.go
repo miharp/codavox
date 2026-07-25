@@ -204,7 +204,7 @@ func TestHandlerEnvironments(t *testing.T) {
 	s := staging(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
-	srv := httptest.NewServer(Handler(s, nil))
+	srv := httptest.NewServer(Handler(s, nil, nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + EnvironmentsPath)
@@ -238,7 +238,7 @@ func TestHandlerArtifact(t *testing.T) {
 			"modules/apache/init.pp": "class apache { }\n",
 		},
 	})
-	srv := httptest.NewServer(Handler(s, nil))
+	srv := httptest.NewServer(Handler(s, nil, nil))
 	defer srv.Close()
 
 	current := s.Environments()["production"]
@@ -335,7 +335,7 @@ func TestArtifactIsSnapshotNotLiveStaging(t *testing.T) {
 	s := staging(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "v1\n"},
 	})
-	srv := httptest.NewServer(Handler(s, nil))
+	srv := httptest.NewServer(Handler(s, nil, nil))
 	defer srv.Close()
 
 	current := s.Environments()["production"]
@@ -447,7 +447,7 @@ func TestRevocationAppliesToAnOpenConnection(t *testing.T) {
 		return nil
 	}
 
-	srv := httptest.NewUnstartedServer(Handler(s, check))
+	srv := httptest.NewUnstartedServer(Handler(s, check, nil))
 	srv.TLS = &tls.Config{
 		Certificates:     []tls.Certificate{serverCert},
 		ClientCAs:        ca.Pool(t),
@@ -505,7 +505,7 @@ func TestMutualTLSEnforcesRole(t *testing.T) {
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 
-	srv := httptest.NewUnstartedServer(Handler(s, nil))
+	srv := httptest.NewUnstartedServer(Handler(s, nil, nil))
 	srv.TLS = &tls.Config{
 		Certificates:     []tls.Certificate{serverCert},
 		ClientCAs:        ca.Pool(t),

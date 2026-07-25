@@ -54,7 +54,7 @@ so the two servers' distinct listen addresses do not collide.
 
 ## Which commands read it
 
-`publish`, `agent`, `deploy`, `deploy-server`, and `provenance`.
+`publish`, `agent`, `compilers`, `deploy`, `deploy-server`, and `provenance`.
 
 **`code-id` and `code-content` deliberately do not.** OpenVox Server spawns them
 on every static catalog compile, so they must stay a single symlink read and a
@@ -67,12 +67,12 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 |---|---|---|
 | `staging` | publish, deploy, deploy-server | `--staging` |
 | `state` | publish, deploy, deploy-server, provenance | `--state` |
-| `ssldir` | publish, agent, deploy-server | `--ssldir` |
-| `certname` | publish, agent, deploy-server | `--certname` |
+| `ssldir` | publish, agent, compilers, deploy-server | `--ssldir` |
+| `certname` | publish, agent, compilers, deploy-server | `--certname` |
 | `environmentpath` | agent | `--environmentpath` |
 | `r10k` | deploy, deploy-server | `--r10k` |
 | `r10k_config` | deploy, deploy-server | `--r10k-config` |
-| `publish.listen` | publish | `--listen` |
+| `publish.listen` | publish, compilers | `--listen` |
 | `publish.allow_roles` | publish | `--allow-role` |
 | `publish.allow_certnames` | publish | `--allow-certname` |
 | `publish.certificate_revocation` | publish | `--certificate-revocation` |
@@ -80,7 +80,7 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | `deploy_server.api_token` | deploy-server | `--api-token` |
 | `deploy_server.secret` | deploy-server | `--secret` |
 | `deploy_server.history` | deploy-server | `--history` |
-| `agent.publisher` | agent | `--publisher` |
+| `agent.publisher` | agent, compilers | `--publisher` |
 | `agent.interval` | agent | `--interval` |
 | `agent.keep` | agent | `--keep` |
 | `agent.min_age` | agent | `--min-age` |

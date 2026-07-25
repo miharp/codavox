@@ -5,6 +5,7 @@ process.
 
 - [`codavox code-id`](#codavox-code-id)
 - [`codavox code-content`](#codavox-code-content)
+- [`codavox compilers`](#codavox-compilers)
 - [`codavox provenance`](#codavox-provenance)
 - [`codavox version`](#codavox-version)
 - [Exit codes](#exit-codes)
@@ -12,8 +13,8 @@ process.
 - [On-disk layout](#on-disk-layout)
 - [Environment variables](#environment-variables)
 
-The compiler-side commands (`code-id`, `code-content`) and the operator command
-`provenance` are documented here. Every other subcommand has its own page:
+The compiler-side commands (`code-id`, `code-content`) and the operator commands
+`compilers` and `provenance` are documented here. Every other subcommand has its own page:
 
 | command | page |
 |---|---|
@@ -108,6 +109,62 @@ would become an arbitrary file read on every compiler.
 $ codavox code-content production a3f1c9e4b2d8 ../../../../etc/passwd
 codavox: opening "../../../../etc/passwd" in a3f1c9e4b2d8: openat ../../../../etc/passwd: path escapes from parent
 ```
+
+---
+
+## `codavox compilers`
+
+```text
+codavox compilers [--publisher <url>] [--certname <name>] [--ssldir <dir>] [--json]
+```
+
+Prints what every compiler is serving. **Run it on the publisher**, whose own
+certificate it uses to read the fleet view.
+
+```console
+$ codavox compilers
+COMPILER                ENVIRONMENT  CODE_ID       LAST POLL
+compiler01.example.com  production   3224ddbe7e3d  12s ago
+compiler01.example.com  testing      9a1f0c4e2b8d  12s ago
+compiler02.example.com  production   7b05ff282795  9m0s ago
+```
+
+This is the question a fleet cannot otherwise answer: are my compilers on the
+current code? Without it you would run `codavox code-id` on every node in turn,
+which is fine at four compilers and useless at forty.
+
+### It is each compiler's own answer
+
+The `code_id` in each row is what that compiler reported about *itself*, read
+from the same environment symlink its `code-id` reads. So `codavox compilers`
+here and `codavox code-id` there answer the same question and must agree.
+
+That is a stronger claim than it sounds. The publisher also knows which
+artifacts it handed out, but a compiler that downloaded one can still have
+failed to verify or unpack it, and would then go on serving the previous
+version. Inferring convergence from downloads would report that node as current.
+Asking it what it is serving does not.
+
+What the two cannot share is freshness. A report is as old as that compiler's
+last poll, which is why `LAST POLL` is on every row: a compiler that stopped
+polling an hour ago is reporting what it was serving an hour ago.
+
+Two rows are worth reading carefully:
+
+- **`(not reported)`** — the compiler is polling but said nothing. Either it has
+  nothing deployed yet, or it is running an agent older than this feature. It is
+  listed rather than hidden, because an incomplete view should be visible.
+- **A compiler that is missing entirely** has not polled since the publisher
+  started. The view is in memory and best effort, so a publisher restart empties
+  it; a healthy fleet refills it within one poll interval.
+
+`--json` emits the full records, including per-environment fetch history and
+counters, for monitoring. `--publisher` overrides the URL (default
+`https://<certname>:<port from publish.listen>`). An empty fleet is not an
+error: the command says so on stderr and exits `0`.
+
+The same data is available directly at
+[`GET /v1/compilers`](publishing.md#get-v1compilers).
 
 ---
 

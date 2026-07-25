@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,7 +17,22 @@ import (
 	"github.com/miharp/codavox/internal/layout"
 	"github.com/miharp/codavox/internal/publish"
 	"github.com/miharp/codavox/internal/seal"
+	"github.com/miharp/codavox/internal/testca"
 )
+
+// fakePeerState builds the ConnectionState mutual TLS would have produced, so a
+// plaintext test server can still exercise the certname path.
+func fakePeerState(t *testing.T, cn string) *tls.ConnectionState {
+	t.Helper()
+	ca := testca.New(t)
+	certPEM, _ := ca.Issue(t, cn, "openvox_compiler", false)
+	block, _ := pem.Decode(certPEM)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+}
 
 // fixture wires a publisher and a compiler-side agent against temp directories.
 type fixture struct {
@@ -30,7 +48,7 @@ func newFixture(t *testing.T) *fixture {
 
 	staging := t.TempDir()
 	store := publish.NewStore(staging, t.TempDir())
-	server := httptest.NewServer(publish.Handler(store, nil))
+	server := httptest.NewServer(publish.Handler(store, nil, nil))
 	t.Cleanup(server.Close)
 
 	base := t.TempDir()
@@ -411,5 +429,49 @@ func TestDeployedVersionIsReadableByOtherUsers(t *testing.T) {
 	}
 	if fi.Mode().Perm()&0o044 != 0o044 {
 		t.Errorf("environment.conf mode is %#o; puppetserver cannot read it", fi.Mode().Perm())
+	}
+}
+
+// A single reconciliation must leave the publisher knowing what this node now
+// serves. Reporting only on the poll would trail every deploy by a full
+// interval, which is long enough for an operator watching a deploy land to read
+// a converged compiler as a stale one.
+func TestOnceReportsTheVersionItJustDeployed(t *testing.T) {
+	f := newFixture(t)
+
+	// Stand in for what mutual TLS would put on the request, so the publisher
+	// files the report under a certname.
+	peers := publish.NewPeers()
+	reporting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.TLS = fakePeerState(t, "compiler01.example.com")
+		publish.Handler(f.store, nil, peers).ServeHTTP(w, r)
+	}))
+	defer reporting.Close()
+	f.agent.cfg.BaseURL = reporting.URL
+	f.agent.cfg.Client = reporting.Client()
+
+	want := f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "v1\n"})
+
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	list := peers.List()
+	if len(list) != 1 {
+		t.Fatalf("got %d peers, want 1", len(list))
+	}
+	if got := list[0].Serving["production"]; got != want {
+		t.Errorf("publisher has %q after one sync, want the version just deployed %q", got, want)
+	}
+
+	// A converged run adds no request. The follow-up report exists for the run
+	// that changed something; paying for it every interval would be a poll's
+	// worth of traffic per compiler for no new information.
+	before := list[0].Polls
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := peers.List()[0].Polls - before; got != 1 {
+		t.Errorf("a converged run made %d requests, want 1", got)
 	}
 }

@@ -14,14 +14,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/miharp/codavox/internal/agent"
@@ -78,6 +82,11 @@ Usage:
         POST /v1/deploys and deploy status; --secret enables the push webhook.
         (codavox webhook is an alias serving only the webhook.)
 
+  codavox compilers [--publisher <url>] [--certname <name>] [--ssldir <dir>]
+                    [--json]
+        Print what each compiler is serving, as the compilers themselves report
+        it. Run this on the publisher, whose own certificate it uses.
+
   codavox provenance <environment> <code-id> [--state <dir>] [--json]
         Print the control-repo commit that produced a code_id, read from the
         publisher's local provenance log. Run this on the publisher.
@@ -85,10 +94,10 @@ Usage:
   codavox version
         Print the codavox version.
 
-The publish, agent, deploy, deploy-server, and provenance commands read shared
-settings from a config file (--config <file>, or CODAVOX_CONFIG, default
-/etc/codavox/config.yaml). A flag overrides the file; the file overrides the
-built-in default.
+The publish, agent, compilers, deploy, deploy-server, and provenance commands
+read shared settings from a config file (--config <file>, or CODAVOX_CONFIG,
+default /etc/codavox/config.yaml). A flag overrides the file; the file overrides
+the built-in default.
 
 Environment:
   CODAVOX_ROOT     Override the deployment root (default %s).
@@ -152,6 +161,8 @@ func run(cmd string, args []string) error {
 		// webhook is a compatibility alias: deploy-server with only --secret set
 		// serves the webhook route and nothing else.
 		return deployServer(args)
+	case "compilers":
+		return compilersQuery(args)
 	case "provenance":
 		return provenanceQuery(args)
 	case "version":
@@ -283,7 +294,7 @@ func publishServe(args []string) error {
 		roles      []string
 		certnames  []string
 	}{
-		listen: ":8150",
+		listen: ":" + defaultPublishPort,
 		ssldir: puppetca.DefaultSSLDir,
 		state:  defaultStateDir(),
 	}
@@ -457,6 +468,10 @@ func publishServe(args []string) error {
 		Store:     store,
 		TLSConfig: tlsConfig,
 		PeerCheck: rev.Check,
+		// In memory and best effort: a restart empties it and a healthy fleet
+		// refills it within one poll interval. Persisting it would create a
+		// second store of state the environment symlink already owns.
+		Peers: publish.NewPeers(),
 	}
 	return srv.Serve(ctx)
 }
@@ -958,6 +973,171 @@ func overlay(dst *string, v string) {
 // reaches a compiler and never feeds code-id, which stays a single symlink read.
 func defaultStateDir() string {
 	return filepath.Join(layout.New().Root, "state")
+}
+
+// listenPort extracts the port from a listen address, so a publisher moved off
+// :8150 can be reached without also passing --publisher. An address that does
+// not parse falls back to the default rather than failing: the caller can always
+// name the publisher explicitly, and refusing to run over a malformed config
+// line would be a worse answer than trying the port everyone uses.
+func listenPort(listen string) string {
+	if _, port, err := net.SplitHostPort(listen); err == nil && port != "" {
+		return port
+	}
+	return defaultPublishPort
+}
+
+// defaultPublishPort is the publisher's port, matching the default --listen.
+const defaultPublishPort = "8150"
+
+// compilersQuery prints what each compiler is serving.
+//
+// It reads the publisher's fleet view over mutual TLS using this node's own
+// certificate, which the publisher always admits. Run on the publisher, it
+// therefore needs no configuration beyond what publishing already needs.
+//
+// The output is what each compiler reported about itself, read from the same
+// symlink its code-id reads — so `codavox compilers` on the publisher and
+// `codavox code-id` on a compiler answer the same question, and must agree.
+// What they cannot share is freshness: a report is as old as that compiler's
+// last poll, which last_poll states rather than hides.
+func compilersQuery(args []string) error {
+	var (
+		publisher string
+		certname  string
+		ssldir    = puppetca.DefaultSSLDir
+		asJSON    bool
+	)
+
+	cfg, err := config.Load(configPath(args))
+	if err != nil {
+		return err
+	}
+	overlay(&ssldir, cfg.SSLDir)
+	overlay(&certname, cfg.Certname)
+	overlay(&publisher, cfg.Agent.Publisher)
+
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
+		case "--config":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--config needs a value")
+			}
+		case "--publisher":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--publisher needs a value")
+			}
+			publisher = args[i]
+		case "--certname":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--certname needs a value")
+			}
+			certname = args[i]
+		case "--ssldir":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--ssldir needs a value")
+			}
+			ssldir = args[i]
+		case "--json":
+			asJSON = true
+		default:
+			return fmt.Errorf("unknown argument %q", a)
+		}
+	}
+
+	if certname == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return fmt.Errorf("determining certname: %w", err)
+		}
+		certname = hostname
+	}
+	if publisher == "" {
+		// The publisher's own name, not localhost: the certificate it presents
+		// is issued for its certname, so localhost would fail verification.
+		port := listenPort(cfg.Publish.Listen)
+		publisher = "https://" + net.JoinHostPort(certname, port)
+	}
+
+	tlsConfig, err := puppetca.Paths{SSLDir: ssldir, CertName: certname}.ClientTLS()
+	if err != nil {
+		return err
+	}
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+	}
+	defer client.CloseIdleConnections()
+
+	url := strings.TrimSuffix(publisher, "/") + publish.CompilersPath
+	//nolint:gosec // the URL is the operator's own --publisher or config value
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("querying %s: %w", publisher, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("querying %s: %s", publisher, resp.Status)
+	}
+
+	var peers []publish.Peer
+	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+		return fmt.Errorf("decoding the fleet view: %w", err)
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(peers)
+	}
+
+	if len(peers) == 0 {
+		// Not an error. A publisher that has just started has seen nobody yet,
+		// and saying so is the correct answer.
+		fmt.Fprintln(os.Stderr, "no compilers have polled this publisher")
+		return nil
+	}
+	return printFleet(os.Stdout, peers, time.Now().UTC())
+}
+
+// printFleet renders the fleet view as a table, one row per compiler and
+// environment.
+//
+// The publisher's current versions are not shown beside them: this command
+// reports what compilers said, and the publisher's own answer is one line of
+// `curl` away. Marking a row "stale" here would mean deciding how far behind is
+// too far, which depends on the poll interval and the deploy cadence — an
+// operator's judgment, not this command's.
+func printFleet(w io.Writer, peers []publish.Peer, now time.Time) error {
+	// Writes to a tabwriter are buffered, so errors surface from Flush.
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "COMPILER\tENVIRONMENT\tCODE_ID\tLAST POLL")
+	for _, p := range peers {
+		age := "never"
+		if !p.LastPoll.IsZero() {
+			age = now.Sub(p.LastPoll).Truncate(time.Second).String() + " ago"
+		}
+		if len(p.Serving) == 0 {
+			// A compiler that polls but reports nothing is either newly
+			// enrolled with nothing deployed yet, or running an agent older
+			// than this feature. Both are worth seeing, so it gets a row.
+			_, _ = fmt.Fprintf(tw, "%s\t-\t(not reported)\t%s\n", p.Certname, age)
+			continue
+		}
+		envs := make([]string, 0, len(p.Serving))
+		for env := range p.Serving {
+			envs = append(envs, env)
+		}
+		sort.Strings(envs)
+		for _, env := range envs {
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.Certname, env, p.Serving[env], age)
+		}
+	}
+	return tw.Flush()
 }
 
 // provenanceQuery prints the control-repo provenance recorded for a code_id.

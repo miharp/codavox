@@ -278,3 +278,45 @@ func TestServerTLSRequiresARole(t *testing.T) {
 		t.Error("ServerTLS with no allowed roles should fail rather than admit everything")
 	}
 }
+
+// The fleet view is read from the node the publisher runs on, using that node's
+// own certificate — which does not carry a compiler role and which nobody
+// thinks to add to an allowlist. Admitting it is what makes the operator
+// command work with no extra configuration.
+func TestServerTLSAdmitsItsOwnCertname(t *testing.T) {
+	ca := testca.New(t)
+	ssldir := ca.SSLDir(t, "puppet.example.com", "openvox_server")
+
+	paths := Paths{SSLDir: ssldir, CertName: "puppet.example.com"}
+	cfg, _, err := paths.ServerTLS(ServerPolicy{
+		AllowedRoles: []string{"openvox_compiler"},
+		Revocation:   RevocationDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	self := connectionState(t, ca, "puppet.example.com", "openvox_server")
+	if err := cfg.VerifyConnection(self); err != nil {
+		t.Errorf("the publisher refused its own certificate: %v", err)
+	}
+
+	// It admits itself, not every node without a role. Another node's
+	// certificate is still refused.
+	other := connectionState(t, ca, "web01.example.com", "")
+	if err := cfg.VerifyConnection(other); err == nil {
+		t.Error("a node with no role and no listing was admitted")
+	}
+}
+
+// connectionState builds what a completed handshake with this peer would leave.
+func connectionState(t *testing.T, ca *testca.CA, certname, role string) tls.ConnectionState {
+	t.Helper()
+	certPEM, _ := ca.Issue(t, certname, role, false)
+	block, _ := pem.Decode(certPEM)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+}

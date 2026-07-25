@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/miharp/codavox/internal/publish"
 )
 
 // The argv[0] names are part of the deployed interface: puppetserver's
@@ -162,6 +166,83 @@ func TestProvenanceSubcommandRejectsBadArgs(t *testing.T) {
 	for name, args := range cases {
 		if err := run("provenance", args); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+}
+
+func TestPrintFleet(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	peers := []publish.Peer{
+		{
+			Certname: "compiler01.example.com",
+			LastPoll: now.Add(-12 * time.Second),
+			// Sorted by environment, so two runs of the command are comparable.
+			Serving: map[string]string{"testing": "def456", "production": "abc123"},
+		},
+		{
+			Certname: "compiler02.example.com",
+			LastPoll: now.Add(-9 * time.Minute),
+			Serving:  map[string]string{"production": "stale9"},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := printFleet(&buf, peers, now); err != nil {
+		t.Fatal(err)
+	}
+	// Compare fields, not column widths: the padding is tabwriter's business
+	// and would make this test fail on a cosmetic change.
+	var rows [][]string
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		rows = append(rows, strings.Fields(line))
+	}
+
+	want := [][]string{
+		{"COMPILER", "ENVIRONMENT", "CODE_ID", "LAST", "POLL"},
+		{"compiler01.example.com", "production", "abc123", "12s", "ago"},
+		{"compiler01.example.com", "testing", "def456", "12s", "ago"},
+		{"compiler02.example.com", "production", "stale9", "9m0s", "ago"},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows, want %d:\n%s", len(rows), len(want), buf.String())
+	}
+	for i := range want {
+		if strings.Join(rows[i], " ") != strings.Join(want[i], " ") {
+			t.Errorf("row %d = %v, want %v", i, rows[i], want[i])
+		}
+	}
+}
+
+// A compiler that polls but reports nothing still gets a row. Dropping it would
+// hide a node running an agent too old to report — the one case where the
+// operator most needs to know the view is incomplete.
+func TestPrintFleetShowsCompilersThatReportNothing(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+
+	var buf bytes.Buffer
+	if err := printFleet(&buf, []publish.Peer{
+		{Certname: "compiler03.example.com", LastPoll: now.Add(-time.Second)},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); !strings.Contains(got, "compiler03.example.com") ||
+		!strings.Contains(got, "(not reported)") {
+		t.Errorf("a reporting-less compiler was not shown:\n%s", got)
+	}
+}
+
+func TestListenPort(t *testing.T) {
+	for _, tc := range []struct{ listen, want string }{
+		{":8150", "8150"},
+		{"0.0.0.0:9000", "9000"},
+		{"[::]:9001", "9001"},
+		// Unparseable, so the command tries the port everyone uses rather than
+		// refusing to run.
+		{"", defaultPublishPort},
+		{"nonsense", defaultPublishPort},
+	} {
+		if got := listenPort(tc.listen); got != tc.want {
+			t.Errorf("listenPort(%q) = %q, want %q", tc.listen, got, tc.want)
 		}
 	}
 }
