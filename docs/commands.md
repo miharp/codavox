@@ -115,7 +115,8 @@ codavox: opening "../../../../etc/passwd" in a3f1c9e4b2d8: openat ../../../../et
 ## `codavox compilers`
 
 ```text
-codavox compilers [--publisher <url>] [--certname <name>] [--ssldir <dir>] [--json]
+codavox compilers [--publisher <url>] [--certname <name>] [--ssldir <dir>]
+                  [--state <dir>] [--json]
 ```
 
 Prints what every compiler is serving. **Run it on the publisher**, whose own
@@ -123,15 +124,39 @@ certificate it uses to read the fleet view.
 
 ```console
 $ codavox compilers
-COMPILER                ENVIRONMENT  CODE_ID       LAST POLL
-compiler01.example.com  production   3224ddbe7e3d  12s ago
-compiler01.example.com  testing      9a1f0c4e2b8d  12s ago
-compiler02.example.com  production   7b05ff282795  9m0s ago
+COMPILER                ENVIRONMENT  CODE_ID       COMMIT        LAST POLL
+compiler01.example.com  production   3224ddbe7e3d  a3f1c9e4b2d8  12s ago
+compiler01.example.com  testing      9a1f0c4e2b8d  8c02be71f4d9  12s ago
+compiler02.example.com  production   7b05ff282795  61d70aa9c3e5  9m0s ago
 ```
 
 This is the question a fleet cannot otherwise answer: are my compilers on the
 current code? Without it you would run `codavox code-id` on every node in turn,
 which is fine at four compilers and useless at forty.
+
+### Reading the two id columns
+
+`CODE_ID` is a content hash of the resolved tree — **not a git commit**. It
+answers "are these two compilers serving identical code?" exactly, which a
+commit cannot: r10k resolves a `Puppetfile` differently at different times, so
+the same commit deployed twice can produce different content, and a commit that
+changes only a README produces identical content. The `code_id` is what OpenVox
+Server pins each static catalog to, so it is the id that has to be exact.
+
+`COMMIT` is the control-repo commit that produced it, which is the id *you*
+recognize. codavox reads it from r10k's own `.r10k-deploy.json` at seal time and
+records it in the publisher's provenance log; this command joins the two locally,
+so you get both without running
+[`codavox provenance`](#codavox-provenance) per row.
+
+Reading a row across, then: compiler02 is serving content that came from commit
+`61d70aa9c3e5`, and compiler01 is not — so a deploy has landed on one and not the
+other.
+
+A `-` in `COMMIT` means no provenance was recorded for that `code_id`. That is
+not an error: provenance is best-effort, and a missing record is reported
+honestly rather than filled in from a different version. Both ids are shortened
+for the table; `--json` carries them in full.
 
 ### It is each compiler's own answer
 
@@ -158,9 +183,53 @@ Two rows are worth reading carefully:
   started. The view is in memory and best effort, so a publisher restart empties
   it; a healthy fleet refills it within one poll interval.
 
-`--json` emits the full records, including per-environment fetch history and
-counters, for monitoring. `--publisher` overrides the URL (default
-`https://<certname>:<port from publish.listen>`). An empty fleet is not an
+### `--json`
+
+For monitoring. It carries both ids **at full length** — a shortened id cannot
+be compared exactly — plus the fetch history and counters the table leaves out:
+
+```json
+[
+  {
+    "certname": "compiler01.example.com",
+    "last_seen": "2026-07-25T18:33:48Z",
+    "last_poll": "2026-07-25T18:33:48Z",
+    "serving": {
+      "production": "7b05ff28279c54d252387a522beee5a434c234713c8c8c545ee34bc531930d3a"
+    },
+    "serving_at": "2026-07-25T18:33:48Z",
+    "fetched": {
+      "production": {
+        "code_id": "7b05ff28279c54d252387a522beee5a434c234713c8c8c545ee34bc531930d3a",
+        "at": "2026-07-25T18:33:48Z"
+      }
+    },
+    "polls": 240,
+    "fetches": 3,
+    "commits": {
+      "production": "a3f1c9e4b2d8f70e"
+    }
+  }
+]
+```
+
+This is [`GET /v1/compilers`](publishing.md#get-v1compilers)'s own shape plus
+`commits`, which this command resolves locally. So a check written against the
+endpoint reads this output unchanged, and one written against this output does
+not break when pointed at the endpoint — it simply sees no commits. An
+environment with no recorded provenance is **absent from `commits`** rather than
+present and empty.
+
+A useful check is "every compiler reports the same `code_id` for the
+environment, and polled recently". Note the difference between `serving` and
+`fetched`: the first is what the compiler said about itself, the second is what
+the publisher watched it download.
+
+### Other options
+
+`--publisher` overrides the URL (default
+`https://<certname>:<port from publish.listen>`); `--state` overrides where the
+provenance log is read from (default `<root>/state`). An empty fleet is not an
 error: the command says so on stderr and exits `0`.
 
 The same data is available directly at

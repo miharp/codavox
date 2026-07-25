@@ -66,7 +66,7 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | key | commands | flag |
 |---|---|---|
 | `staging` | publish, deploy, deploy-server | `--staging` |
-| `state` | publish, deploy, deploy-server, provenance | `--state` |
+| `state` | publish, compilers, deploy, deploy-server, provenance | `--state` |
 | `ssldir` | publish, agent, compilers, deploy-server | `--ssldir` |
 | `certname` | publish, agent, compilers, deploy-server | `--certname` |
 | `environmentpath` | agent | `--environmentpath` |

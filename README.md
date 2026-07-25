@@ -129,10 +129,13 @@ makes, so the publisher can answer for every compiler:
 
 ```console
 $ codavox compilers
-COMPILER                ENVIRONMENT  CODE_ID       LAST POLL
-compiler01.example.com  production   3224ddbe7e3d  12s ago
-compiler02.example.com  production   7b05ff282795  9m0s ago
+COMPILER                ENVIRONMENT  CODE_ID       COMMIT        LAST POLL
+compiler01.example.com  production   3224ddbe7e3d  a3f1c9e4b2d8  12s ago
+compiler02.example.com  production   7b05ff282795  61d70aa9c3e5  9m0s ago
 ```
+
+The `code_id` is what OpenVox Server pins catalogs to; the commit beside it is
+what you recognize, joined from r10k's own deploy record.
 
 ## Install
 

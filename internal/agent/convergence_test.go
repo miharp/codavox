@@ -680,16 +680,23 @@ func TestCompilersCommandOnThePublisher(t *testing.T) {
 	ca := testca.New(t)
 
 	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	writeEnv(t, staging, "production", map[string]string{
+		"manifests/site.pp": "v1\n",
+		// r10k leaves this behind; the publisher reads it to record which
+		// control-repo commit produced the code_id. It is excluded from
+		// sealing, so it never reaches a compiler.
+		".r10k-deploy.json": `{"signature":"a3f1c9e4b2d8f70e","finished_at":"2026-07-25 12:00:00 -0400"}`,
+	})
 
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 	const addr = "127.0.0.1:18155"
 	const publisher = "https://" + addr
 
+	state := t.TempDir()
 	pub := exec.Command(bin, "publish",
 		"--staging", staging, "--listen", addr,
 		"--certname", "puppet.example.com", "--ssldir", serverSSL,
-		"--state", t.TempDir())
+		"--state", state)
 	pub.Stderr = os.Stderr
 	if err := pub.Start(); err != nil {
 		t.Fatal(err)
@@ -720,6 +727,7 @@ func TestCompilersCommandOnThePublisher(t *testing.T) {
 			"--certname", "puppet.example.com",
 			"--ssldir", serverSSL,
 			"--publisher", publisher,
+			"--state", state,
 		}, extra...)
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err != nil {
@@ -734,15 +742,34 @@ func TestCompilersCommandOnThePublisher(t *testing.T) {
 	}
 
 	out := compilers(t)
-	if !strings.Contains(out, "compiler01.example.com") || !strings.Contains(out, want) {
+	if !strings.Contains(out, "compiler01.example.com") || !strings.Contains(out, want[:12]) {
 		t.Errorf("codavox compilers did not report the compiler at %s:\n%s", want, out)
 	}
+	// A code_id is a content hash, so the commit is what an operator recognizes.
+	// The join happens locally against the publisher's provenance log.
+	if !strings.Contains(out, "a3f1c9e4b2d8") {
+		t.Errorf("codavox compilers did not resolve the code_id to a commit:\n%s", out)
+	}
+	t.Logf("codavox compilers:\n%s", out)
 
-	var peers []publish.Peer
-	if err := json.Unmarshal([]byte(compilers(t, "--json")), &peers); err != nil {
+	// --json carries both ids at full length: it is what a monitoring check
+	// reads, and a shortened id cannot be compared exactly.
+	raw := compilers(t, "--json")
+	var records []struct {
+		publish.Peer
+		Commits map[string]string `json:"commits"`
+	}
+	if err := json.Unmarshal([]byte(raw), &records); err != nil {
 		t.Fatal(err)
 	}
-	if len(peers) != 1 || peers[0].Serving["production"] != want {
-		t.Errorf("--json reported %+v, want compiler01 serving %s", peers, want)
+	if len(records) != 1 {
+		t.Fatalf("--json reported %d compilers, want 1:\n%s", len(records), raw)
 	}
+	if got := records[0].Serving["production"]; got != want {
+		t.Errorf("--json code_id = %q, want the full %q", got, want)
+	}
+	if got := records[0].Commits["production"]; got != "a3f1c9e4b2d8f70e" {
+		t.Errorf("--json commit = %q, want the full a3f1c9e4b2d8f70e", got)
+	}
+	t.Logf("codavox compilers --json:\n%s", raw)
 }

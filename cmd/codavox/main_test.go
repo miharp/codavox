@@ -186,8 +186,13 @@ func TestPrintFleet(t *testing.T) {
 		},
 	}
 
+	// A code_id is a content hash, so the commit is what an operator recognizes.
+	commits := map[string]string{
+		"production\x00abc123": "a3f1c9e4b2d8f70e",
+	}
+
 	var buf bytes.Buffer
-	if err := printFleet(&buf, peers, now); err != nil {
+	if err := printFleet(&buf, peers, commits, now); err != nil {
 		t.Fatal(err)
 	}
 	// Compare fields, not column widths: the padding is tabwriter's business
@@ -198,10 +203,12 @@ func TestPrintFleet(t *testing.T) {
 	}
 
 	want := [][]string{
-		{"COMPILER", "ENVIRONMENT", "CODE_ID", "LAST", "POLL"},
-		{"compiler01.example.com", "production", "abc123", "12s", "ago"},
-		{"compiler01.example.com", "testing", "def456", "12s", "ago"},
-		{"compiler02.example.com", "production", "stale9", "9m0s", "ago"},
+		{"COMPILER", "ENVIRONMENT", "CODE_ID", "COMMIT", "LAST", "POLL"},
+		// The commit is shortened for the table; --json carries it whole.
+		{"compiler01.example.com", "production", "abc123", "a3f1c9e4b2d8", "12s", "ago"},
+		// No provenance recorded reads as "-", never as another version's.
+		{"compiler01.example.com", "testing", "def456", "-", "12s", "ago"},
+		{"compiler02.example.com", "production", "stale9", "-", "9m0s", "ago"},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("got %d rows, want %d:\n%s", len(rows), len(want), buf.String())
@@ -222,7 +229,7 @@ func TestPrintFleetShowsCompilersThatReportNothing(t *testing.T) {
 	var buf bytes.Buffer
 	if err := printFleet(&buf, []publish.Peer{
 		{Certname: "compiler03.example.com", LastPoll: now.Add(-time.Second)},
-	}, now); err != nil {
+	}, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	if got := buf.String(); !strings.Contains(got, "compiler03.example.com") ||
@@ -244,5 +251,80 @@ func TestListenPort(t *testing.T) {
 		if got := listenPort(tc.listen); got != tc.want {
 			t.Errorf("listenPort(%q) = %q, want %q", tc.listen, got, tc.want)
 		}
+	}
+}
+
+// A full code_id is 64 hex characters, which would push every other column off a
+// terminal. The table shortens it; --json carries the whole thing.
+func TestPrintFleetShortensIDs(t *testing.T) {
+	const full = "3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb"
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+
+	var buf bytes.Buffer
+	if err := printFleet(&buf, []publish.Peer{{
+		Certname: "compiler01.example.com",
+		LastPoll: now,
+		Serving:  map[string]string{"production": full},
+	}}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, full[:shortID]) {
+		t.Errorf("output does not show the shortened id:\n%s", got)
+	}
+	if strings.Contains(got, full) {
+		t.Errorf("output shows the full 64-character id:\n%s", got)
+	}
+}
+
+// --json must carry everything the table shows, at full length. It is what a
+// monitoring check reads, and a truncated id cannot be compared exactly.
+func TestFleetRecordsJSON(t *testing.T) {
+	const (
+		full   = "3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb"
+		commit = "a3f1c9e4b2d8f70e5c91847d3b6209fe1a4c8d02"
+	)
+	peers := []publish.Peer{{
+		Certname: "compiler01.example.com",
+		LastPoll: time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC),
+		Serving:  map[string]string{"production": full, "testing": "def456"},
+		Polls:    240,
+	}}
+
+	out, err := json.Marshal(fleetRecords(peers, map[string]string{
+		"production\x00" + full: commit,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []struct {
+		Certname string            `json:"certname"`
+		Serving  map[string]string `json:"serving"`
+		Commits  map[string]string `json:"commits"`
+		Polls    uint64            `json:"polls"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+
+	// The embedded Peer's fields stay at the top level, so anything written
+	// against /v1/compilers reads this output unchanged.
+	if got[0].Certname != "compiler01.example.com" || got[0].Polls != 240 {
+		t.Errorf("the peer's own fields did not survive embedding: %+v", got[0])
+	}
+	if got[0].Serving["production"] != full {
+		t.Errorf("code_id = %q, want the full id", got[0].Serving["production"])
+	}
+	if got[0].Commits["production"] != commit {
+		t.Errorf("commit = %q, want %q", got[0].Commits["production"], commit)
+	}
+	// An environment with no recorded provenance is absent, not empty: a
+	// missing record must never read as another version's commit.
+	if _, present := got[0].Commits["testing"]; present {
+		t.Errorf("testing has a commit it never recorded: %+v", got[0].Commits)
 	}
 }

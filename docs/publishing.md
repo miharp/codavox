@@ -200,7 +200,11 @@ What every compiler is serving, as the compilers themselves report it.
 ```
 
 Read it with [`codavox compilers`](commands.md#codavox-compilers), which formats
-it as a table.
+it as a table and joins each `code_id` to the control-repo commit that produced
+it, from the provenance log below.
+
+The endpoint itself carries no commits: the provenance log stays publisher-only,
+and the join happens in the command, which already runs on the publisher.
 
 `serving` is what that compiler said about itself, read from the same
 environment symlink its `code-id` reads — so the fleet view and the node agree
