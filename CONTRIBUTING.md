@@ -6,14 +6,29 @@ Requires Go 1.26.
 
 ```console
 go build ./cmd/codavox
-go test -race ./...
-golangci-lint run ./...
-gofmt -l .
+go test -race ./...            # -race matters: the agent swaps while code-id reads
+golangci-lint run ./...        # CI pins v2.12.2
+gofmt -l .                     # must print nothing
 ```
 
-CI runs all of the above plus markdownlint and the benchmarks, and
-cross-compiles `linux/amd64` and `linux/arm64`. Run them locally before opening
-a pull request.
+CI runs those, and four more gates that are easy to forget locally because they
+are not `go` commands:
+
+```console
+go test -run '^$' -fuzz FuzzExtractArchive -fuzztime 60s ./internal/seal/
+find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck --external-sources
+npx cspell '**/*.md'           # docs only; add terms to cspell.json, do not reword
+govulncheck ./...
+```
+
+It also runs markdownlint and the benchmarks, and cross-compiles
+`linux/amd64` and `linux/arm64`. Run all of it locally before opening a pull
+request.
+
+Beyond that, **anything touching TLS, the agent's HTTP client, packaging, or the
+systemd units needs the integration harness too** — see
+[Integration testing](#integration-testing) below for why the Go tests cannot
+cover those.
 
 ### Testing the commands by hand
 
@@ -32,6 +47,40 @@ ln -s "$CODAVOX_ROOT/versions/production_abc123" "$CODAVOX_ENVIRONMENTPATH/produ
 go run ./cmd/codavox code-id production                               # -> abc123
 go run ./cmd/codavox code-content production abc123 manifests/site.pp
 ```
+
+### Integration testing
+
+The Go tests cover a great deal, but they cannot cover the
+`versioned-code-service` contract itself: that contract is with a live
+puppetserver, running as a different user, on a real filesystem, holding real
+Puppet certificates. [`test/integration/`](test/integration/) stands up a
+two-node OpenVox topology in Docker and exercises the whole chain against it.
+
+```console
+./test/integration/run.sh          # build HEAD, provision, test, tear down
+KEEP=1 ./test/integration/run.sh   # leave the topology up for inspection
+```
+
+Requires Docker and [GoReleaser](https://goreleaser.com); takes a few minutes.
+See [test/integration/README.md](test/integration/README.md) for the topology,
+what each feature asserts, and how to debug a failed run.
+
+**Run it before a pull request that touches TLS, the agent's HTTP client,
+packaging, or the systemd units.** Those are the areas where a change can pass
+every Go test and still be broken in production, because the tests do not
+reproduce the shape of the deployed system:
+
+| the tests do this | production does this |
+|---|---|
+| `agent --once` — a fresh process, so a fresh connection, per sync | a long-lived daemon reusing one keep-alive connection for hours |
+| run as one user, in a temp directory | agent as root, OpenVox Server as `puppet`, in `/opt/puppetlabs` |
+| link a Go library into the test binary | install an rpm, enable a unit, log to the journal |
+
+Each column has produced a real bug. Certificate revocation checked only during
+the TLS handshake passed every Go test and still served a revoked compiler
+indefinitely, because the running agent never handshakes again. Version
+directories left at mode `0700` failed every catalog compile with `EACCES`.
+Neither is visible without a real server.
 
 ## Design rules
 
