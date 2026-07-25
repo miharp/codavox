@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -87,6 +88,56 @@ func TestLoadUsesEnvVar(t *testing.T) {
 	}
 	if c.Staging != "/from/env" {
 		t.Errorf("staging = %q, want /from/env", c.Staging)
+	}
+}
+
+// A file holding no settings is a configuration that sets nothing, not a parse
+// error. This is the shipped conffile's normal state and what commenting a
+// setting out produces, so treating it as a failure would stop every daemon on
+// a fresh install.
+func TestLoadEmptyFileIsEmptyConfig(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty file":        "",
+		"only a newline":    "\n",
+		"only comments":     "# staging: /x\n# nothing set\n",
+		"comments and gaps": "\n\n# codavox config\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, err := Load(writeConfig(t, body))
+			if err != nil {
+				t.Fatalf("Load(%q): %v", body, err)
+			}
+			if !reflect.DeepEqual(c, Config{}) {
+				t.Errorf("expected a zero config, got %+v", c)
+			}
+		})
+	}
+}
+
+// The conffile the package installs at /etc/codavox/config.yaml must load. It
+// is fully commented out by design, which is exactly the case that used to
+// fail, and nothing else in CI would catch a syntax error in it.
+func TestShippedConffileLoads(t *testing.T) {
+	c, err := Load(filepath.Join("..", "..", "packaging", "config.yaml"))
+	if err != nil {
+		t.Fatalf("the packaged conffile does not load: %v", err)
+	}
+	// Shipped inert: installing the package must not change any behavior.
+	if !reflect.DeepEqual(c, Config{}) {
+		t.Errorf("the packaged conffile sets values as shipped: %+v", c)
+	}
+}
+
+// The example is a populated file, so it also has to parse — and, because
+// KnownFields is on, it doubles as a check that every key it documents still
+// exists.
+func TestExampleConfigLoads(t *testing.T) {
+	c, err := Load(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("config.example.yaml does not load: %v", err)
+	}
+	if c.Staging == "" || c.Agent.Publisher == "" {
+		t.Errorf("the example parsed but looks empty: %+v", c)
 	}
 }
 

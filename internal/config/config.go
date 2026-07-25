@@ -12,15 +12,17 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"gopkg.in/yaml.v3"
 )
 
 // DefaultPath is where codavox looks for its configuration when neither --config
-// nor CODAVOX_CONFIG names one. It matches the file the package ships as a
-// config-noreplace conffile.
+// nor CODAVOX_CONFIG names one. The rpm and deb ship packaging/config.yaml here
+// as a noreplace conffile, so an upgrade never overwrites a site's settings.
 const DefaultPath = "/etc/codavox/config.yaml"
 
 // PathEnvVar overrides the configuration file location.
@@ -95,6 +97,15 @@ func Load(flagPath string) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
+		// A file holding no YAML document — empty, or nothing but comments —
+		// decodes as io.EOF. That is the shipped conffile's normal state and the
+		// obvious result of commenting a setting out, so it means "no
+		// configuration", not a parse failure. Reporting EOF here would stop
+		// every daemon on a fresh install with an error naming nothing an
+		// operator could act on.
+		if errors.Is(err, io.EOF) {
+			return Config{}, nil
+		}
 		return Config{}, fmt.Errorf("parsing config %s: %w", path, err)
 	}
 	return c, nil

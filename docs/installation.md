@@ -78,10 +78,12 @@ resolution, upgrade, and clean uninstall in the meantime.
 /usr/bin/codavox
 /usr/bin/codavox-code-id       -> codavox
 /usr/bin/codavox-code-content  -> codavox
+/etc/codavox/config.yaml                       # conffile, shipped fully commented out
 /opt/puppetlabs/codavox/versions/
 /usr/lib/systemd/system/codavox-agent.service
 /usr/lib/systemd/system/codavox-publish.service
 /usr/lib/systemd/system/codavox-deploy-server.service
+/usr/share/doc/codavox/config.example.yaml     # populated example, for reference
 ```
 
 The two symlinks exist because OpenVox Server passes only positional arguments
@@ -92,6 +94,11 @@ The binary installs to `/usr/bin`, not `/opt/puppetlabs/bin`. That directory
 belongs to the openvox-agent package, and shipping into it risks file conflicts
 on upgrade. `versioned-code.conf` takes an absolute path, so nothing is gained
 by co-locating.
+
+`/etc/codavox/config.yaml` ships with every setting commented out, so it changes
+nothing until you edit it. It is installed as a conffile — `%config(noreplace)`
+on rpm, a `conffile` on deb — so your edits survive upgrades and a new version of
+the file arrives beside it as `.rpmnew` or `.dpkg-dist` to merge at your leisure.
 
 **Installing the package changes no configuration.** The postinstall runs only
 `systemctl daemon-reload`; no unit is enabled or started, and nothing is written
@@ -142,7 +149,8 @@ apt-get purge codavox
 ```
 
 Removal leaves `/opt/puppetlabs/codavox/versions/` in place if it contains
-deployed code. Delete it by hand if you want the node fully cleaned.
+deployed code, and leaves `/etc/codavox/config.yaml` if you edited it. Delete
+both by hand if you want the node fully cleaned.
 
 ## Building packages locally
 
