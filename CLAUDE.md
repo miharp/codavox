@@ -102,11 +102,13 @@ argument, and each is defended by a test or a doc.
 - **Distribute resolved trees, never Puppetfiles.** r10k is not deterministic
   across time, so per-compiler resolution can never converge. codavox does not
   own the deploy; it observes an r10k staging dir.
-- **Revocation is enforced, not assumed.** A revoked certificate stays
-  cryptographically valid, so mutual TLS alone would keep admitting a revoked
-  compiler forever. The publisher checks `$ssldir/crl.pem` — the same file every
-  Puppet service reads — and re-reads it when it changes, so
-  `puppetserver ca revoke` takes effect without a restart. A missing or
+- **Revocation is enforced per request, not per handshake.** A revoked
+  certificate stays cryptographically valid, so mutual TLS alone would keep
+  admitting a revoked compiler forever. The publisher checks `$ssldir/crl.pem` —
+  the same file every Puppet service reads — re-reads it when it changes, and
+  applies it to **every request**. A handshake-only check is not enough: the
+  agent polls over one keep-alive connection and never handshakes again, so
+  revocation would not land until that connection dropped. A missing or
   unverifiable CRL is a startup error, never a silent downgrade to "nothing is
   revoked". Follows PE, which sets `ssl-crl-path` on every service listener.
 - **One broken environment must not stop the others.** `Store.Reseal` and the

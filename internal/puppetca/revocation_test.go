@@ -54,7 +54,7 @@ func TestRevokedCertificateIsRefused(t *testing.T) {
 	compilerSSL := ca.SSLDir(t, "compiler01.example.com", "openvox_compiler")
 	compiler := testca.CertFor(t, compilerSSL, "compiler01.example.com")
 
-	cfg, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}})
+	cfg, _, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestRevocationModeScope(t *testing.T) {
 
 	state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{compiler, ca.Cert}}
 
-	leaf, err := p.ServerTLS(ServerPolicy{
+	leaf, _, err := p.ServerTLS(ServerPolicy{
 		AllowedRoles: []string{"openvox_compiler"},
 		Revocation:   RevocationLeaf,
 	})
@@ -105,7 +105,7 @@ func TestRevocationModeScope(t *testing.T) {
 		t.Errorf("leaf mode should not inspect the issuer, got %v", err)
 	}
 
-	chain, err := p.ServerTLS(ServerPolicy{
+	chain, _, err := p.ServerTLS(ServerPolicy{
 		AllowedRoles: []string{"openvox_compiler"},
 		Revocation:   RevocationChain,
 	})
@@ -132,7 +132,7 @@ func TestRevocationDisabledSkipsTheCRL(t *testing.T) {
 	}
 
 	p := Paths{SSLDir: serverSSL, CertName: "puppet.example.com"}
-	cfg, err := p.ServerTLS(ServerPolicy{
+	cfg, _, err := p.ServerTLS(ServerPolicy{
 		AllowedRoles: []string{"openvox_compiler"},
 		Revocation:   RevocationDisabled,
 	})
@@ -155,7 +155,7 @@ func TestMissingCRLIsAStartupError(t *testing.T) {
 	}
 
 	p := Paths{SSLDir: serverSSL, CertName: "puppet.example.com"}
-	if _, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}}); err == nil {
+	if _, _, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}}); err == nil {
 		t.Fatal("a missing CRL was accepted; revocation would have silently done nothing")
 	}
 }
@@ -172,7 +172,7 @@ func TestCRLFromAnotherCAIsRejected(t *testing.T) {
 	}
 
 	p := Paths{SSLDir: serverSSL, CertName: "puppet.example.com"}
-	if _, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}}); err == nil {
+	if _, _, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}}); err == nil {
 		t.Fatal("a CRL signed by an unrelated CA was accepted")
 	}
 }

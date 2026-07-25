@@ -48,7 +48,7 @@ func TestServerAndClientTLS(t *testing.T) {
 	ca := testca.New(t)
 	p := Paths{SSLDir: ca.SSLDir(t, "puppet.example.com", "openvox_server"), CertName: "puppet.example.com"}
 
-	srv, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}})
+	srv, _, err := p.ServerTLS(ServerPolicy{AllowedRoles: []string{"openvox_compiler"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestVerifyConnectionRole(t *testing.T) {
 func TestServerTLSRequiresARole(t *testing.T) {
 	ca := testca.New(t)
 	p := Paths{SSLDir: ca.SSLDir(t, "puppet.example.com", "openvox_server"), CertName: "puppet.example.com"}
-	if _, err := p.ServerTLS(ServerPolicy{}); err == nil {
+	if _, _, err := p.ServerTLS(ServerPolicy{}); err == nil {
 		t.Error("ServerTLS with no allowed roles should fail rather than admit everything")
 	}
 }

@@ -130,9 +130,17 @@ fi
 # This runs last: the compiler cannot fetch code afterwards.
 log "Feature 7 — revoking a compiler's certificate cuts off its access to code"
 before=$(code_id "$COMPILER" production)
-docker exec "$PRIMARY" /opt/puppetlabs/bin/puppetserver ca revoke --certname compiler >/dev/null 2>&1 \
-  || fail "could not revoke the compiler's certificate"
+# Keep the output: when this failed in CI it was suppressed, so the log said
+# only "could not revoke" and not that the CA host did not resolve.
+if revoke_out=$(docker exec "$PRIMARY" /opt/puppetlabs/bin/puppetserver ca revoke \
+  --certname compiler 2>&1); then
+  pass "revoked the compiler's certificate"
+else
+  fail "could not revoke the compiler's certificate: $revoke_out"
+fi
 
+# The agent polls over a keep-alive connection, so this also exercises the
+# publisher re-checking the CRL per request rather than only at handshake.
 bump_and_reseal
 sleep 10
 
@@ -143,11 +151,15 @@ else
   fail "a revoked compiler still fetched code ($before -> $after)"
 fi
 
-# The publisher must say why, rather than failing silently.
-if docker logs "$PRIMARY" 2>&1 | grep -qi "revoked"; then
+# The publisher must say why, rather than failing silently. Read the unit's
+# journal, not `docker logs`: the publisher runs under systemd inside the
+# container, so its stderr goes to the journal while docker logs shows PID 1.
+if docker exec "$PRIMARY" journalctl -u codavox-publish --no-pager 2>/dev/null \
+  | grep -qi "revoked"; then
   pass "the publisher logged the refusal"
 else
   fail "the publisher refused the compiler without saying it was revoked"
+  docker exec "$PRIMARY" journalctl -u codavox-publish --no-pager -n 15 2>&1 | tail -15
 fi
 
 echo

@@ -5,12 +5,14 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -202,7 +204,7 @@ func TestHandlerEnvironments(t *testing.T) {
 	s := staging(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
-	srv := httptest.NewServer(Handler(s))
+	srv := httptest.NewServer(Handler(s, nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + EnvironmentsPath)
@@ -236,7 +238,7 @@ func TestHandlerArtifact(t *testing.T) {
 			"modules/apache/init.pp": "class apache { }\n",
 		},
 	})
-	srv := httptest.NewServer(Handler(s))
+	srv := httptest.NewServer(Handler(s, nil))
 	defer srv.Close()
 
 	current := s.Environments()["production"]
@@ -333,7 +335,7 @@ func TestArtifactIsSnapshotNotLiveStaging(t *testing.T) {
 	s := staging(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "v1\n"},
 	})
-	srv := httptest.NewServer(Handler(s))
+	srv := httptest.NewServer(Handler(s, nil))
 	defer srv.Close()
 
 	current := s.Environments()["production"]
@@ -407,6 +409,87 @@ func TestResealReapsSupersededArtifact(t *testing.T) {
 	}
 }
 
+// Revocation must take effect on a connection that is already open.
+//
+// This is the case the daemon actually presents. An agent polls every 30
+// seconds over one keep-alive connection and never handshakes again, so a check
+// that runs only in VerifyConnection would keep serving a revoked compiler
+// until the connection happened to drop. The first version of this feature had
+// exactly that hole, and the tests missed it because `agent --once` is a fresh
+// process — and therefore a fresh connection — every time.
+//
+// So this test deliberately reuses one client, and asserts the refusal lands on
+// the very next request.
+func TestRevocationAppliesToAnOpenConnection(t *testing.T) {
+	ca := testca.New(t)
+	serverCert := ca.TLSCert(t, "puppet.example.com", "openvox_server")
+	compilerPEM, compilerKeyPEM := ca.Issue(t, "compiler01.example.com", "openvox_compiler", false)
+	compilerCert, err := tls.X509KeyPair(compilerPEM, compilerKeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := staging(t, map[string]map[string]string{
+		"production": {"manifests/site.pp": "node default { }\n"},
+	})
+
+	// revoked flips after the connection is established, standing in for an
+	// operator running `puppetserver ca revoke` against a live publisher.
+	var revoked atomic.Bool
+	check := func(cs *tls.ConnectionState) error {
+		if cs == nil || len(cs.PeerCertificates) == 0 {
+			return errors.New("no peer certificate")
+		}
+		if revoked.Load() {
+			return fmt.Errorf("peer certificate is revoked: %q",
+				cs.PeerCertificates[0].Subject.CommonName)
+		}
+		return nil
+	}
+
+	srv := httptest.NewUnstartedServer(Handler(s, check))
+	srv.TLS = &tls.Config{
+		Certificates:     []tls.Certificate{serverCert},
+		ClientCAs:        ca.Pool(t),
+		ClientAuth:       tls.RequireAndVerifyClientCert,
+		MinVersion:       tls.VersionTLS12,
+		VerifyConnection: puppetca.VerifyConnectionRole("openvox_compiler"),
+	}
+	srv.StartTLS()
+	defer srv.Close()
+
+	// One client, keep-alive on: exactly one handshake for the whole test.
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		Certificates: []tls.Certificate{compilerCert},
+		RootCAs:      ca.Pool(t),
+		MinVersion:   tls.VersionTLS12,
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+
+	poll := func(t *testing.T) int {
+		t.Helper()
+		resp, err := client.Get(srv.URL + EnvironmentsPath)
+		if err != nil {
+			t.Fatalf("polling: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(io.Discard, resp.Body) // drain, so the connection is reused
+		return resp.StatusCode
+	}
+
+	if got := poll(t); got != http.StatusOK {
+		t.Fatalf("before revocation: status = %d, want 200", got)
+	}
+
+	revoked.Store(true)
+
+	if got := poll(t); got != http.StatusForbidden {
+		t.Errorf("after revocation: status = %d, want 403 — the peer kept its access "+
+			"on an already-open connection", got)
+	}
+}
+
 // The end-to-end check that the whole authorization design rests on: a real
 // TLS handshake, with certificates issued by a Puppet-like CA, where an
 // ordinary agent must be refused even though its certificate is perfectly
@@ -422,7 +505,7 @@ func TestMutualTLSEnforcesRole(t *testing.T) {
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 
-	srv := httptest.NewUnstartedServer(Handler(s))
+	srv := httptest.NewUnstartedServer(Handler(s, nil))
 	srv.TLS = &tls.Config{
 		Certificates:     []tls.Certificate{serverCert},
 		ClientCAs:        ca.Pool(t),

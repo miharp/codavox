@@ -358,7 +358,7 @@ func publishServe(args []string) error {
 	}
 
 	paths := puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}
-	tlsConfig, err := paths.ServerTLS(puppetca.ServerPolicy{
+	tlsConfig, rev, err := paths.ServerTLS(puppetca.ServerPolicy{
 		AllowedRoles: opts.roles,
 		Revocation:   revocation,
 	})
@@ -435,7 +435,15 @@ func publishServe(args []string) error {
 		}
 	}()
 
-	srv := &publish.Server{Addr: opts.listen, Store: store, TLSConfig: tlsConfig}
+	// rev.Check is applied per request, not only at handshake: an agent polls
+	// over one keep-alive connection and would otherwise keep its access until
+	// that connection happened to drop.
+	srv := &publish.Server{
+		Addr:      opts.listen,
+		Store:     store,
+		TLSConfig: tlsConfig,
+		PeerCheck: rev.Check,
+	}
 	return srv.Serve(ctx)
 }
 
