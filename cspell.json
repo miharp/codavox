@@ -17,6 +17,8 @@
     "confdir",
     "conffile",
     "createrepo",
+    "crl",
+    "crlSign",
     "cspell",
     "csr",
     "cutover",
@@ -40,11 +42,13 @@
     "headless",
     "HMAC",
     "HOCON",
+    "hostnames",
     "ineffassign",
     "inventoryfile",
     "jittered",
     "keypair",
     "ldflags",
+    "libgit",
     "markdownlint",
     "misspell",
     "mtime",
@@ -85,15 +89,19 @@
     "revive",
     "rpmbuild",
     "rugged",
+    "setgid",
+    "setuid",
     "slog",
     "ssldir",
     "staticcheck",
     "symlinks",
+    "syscall",
     "tarball",
     "trapperkeeper",
     "trimpath",
     "uid",
     "umask",
+    "umasks",
     "undeployed",
     "unlinks",
     "voxpupuli"
@@ -105,6 +113,8 @@
   "ignorePaths": [
     ".git/**",
     "**/*.sum",
-    "**/vendor/**"
+    "**/vendor/**",
+    "dist/**",
+    ".ruby-lsp/**"
   ]
 }

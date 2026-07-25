@@ -2,8 +2,9 @@
 # Shared host-side helpers for the codavox integration harness. Sourced by
 # run.sh and features.sh; not executed directly.
 
-PRIMARY=codavox-primary
-COMPILER=codavox-compiler
+# Exported because the sourcing scripts, not this file, are what use them.
+export PRIMARY=codavox-primary
+export COMPILER=codavox-compiler
 
 log() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()  { printf '\033[1;32m  ok \033[0m%s\n' "$*"; }

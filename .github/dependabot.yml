@@ -1,0 +1,27 @@
+---
+# Actions are pinned to floating major tags and the Go toolchain moves quickly,
+# so without this nothing tells us a pinned action or dependency has a fix
+# waiting. Grouped and monthly: this repo has one direct dependency, and a
+# stream of single-line bumps would just train us to ignore them.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: 'ci'
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      go:
+        patterns: ['*']
+    commit-message:
+      prefix: 'build'
