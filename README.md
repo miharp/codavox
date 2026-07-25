@@ -221,6 +221,7 @@ by design. See [design.md](docs/design.md) for the full rationale.
 | [performance.md](docs/performance.md) | Per-deploy benchmarks and the acceptance timing harness |
 | [design.md](docs/design.md) | Architecture, trade-offs, and known hard parts |
 | [versioned-code-contract.md](docs/versioned-code-contract.md) | The verified OpenVox Server interface codavox implements |
+| [test/integration/](test/integration/README.md) | The Docker harness that tests the whole chain against a real OpenVox Server |
 
 ## Development
 
@@ -229,7 +230,10 @@ go build ./cmd/codavox     # build
 go test ./...              # test
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checks CI runs.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for every check CI runs, and
+[test/integration/](test/integration/README.md) for the Docker harness that
+exercises codavox against a real OpenVox Server — needed for changes to TLS, the
+agent's HTTP client, packaging, or the systemd units.
 
 ## License
 

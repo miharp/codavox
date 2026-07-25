@@ -61,6 +61,42 @@ second compiler if you want that shape too.
    certificate is still cryptographically valid and still carries its `pp_role`.
    Runs last, because the compiler cannot fetch code afterwards.
 
+## Debugging a failed run
+
+`features.sh` deliberately runs without `set -e`, so one failure does not hide
+the rest and the summary lists everything that broke.
+
+Keep the topology and poke at it:
+
+```console
+KEEP=1 ./test/integration/run.sh
+./test/integration/features.sh          # re-run the assertions alone, as often as you like
+docker compose -f test/integration/compose.yml down -v   # tear down when finished
+```
+
+**Read the journal, not `docker logs`.** The codavox and puppetserver units run
+under systemd inside each container, so `docker logs` shows PID 1 and never the
+daemon's own output:
+
+```console
+docker exec codavox-primary  journalctl -u codavox-publish       --no-pager
+docker exec codavox-primary  journalctl -u codavox-deploy-server --no-pager
+docker exec codavox-compiler journalctl -u codavox-agent         --no-pager
+docker exec codavox-compiler journalctl -u puppetserver          --no-pager
+```
+
+This is worth internalizing: an assertion written against `docker logs` reports
+a failure that is not real, which is a worse outcome than no assertion at all.
+
+Two more things that mislead:
+
+- **The primary's `server` setting.** `puppetserver ca` talks to the CA over
+  HTTPS at whatever `server` names, so if it is wrong, revoking or signing fails
+  with a DNS error that says nothing about certificates.
+  [`provision-primary.sh`](provision-primary.sh) sets it to `primary`.
+- **Never discard a command's output in an assertion.** A test whose job is to
+  explain a failure must not hide the one line that explains it.
+
 ## Files
 
 | file | role |
@@ -112,7 +148,7 @@ bolt plan run ovadm::codavox server_host=puppet \
   --inventoryfile ~/projects/codavox/test/integration/inventory.yaml
 ```
 
-## Two bugs a real server found that unit tests could not
+## Three bugs a real server found that unit tests could not
 
 **Deployed version directories were mode 0700.** `os.MkdirTemp` creates 0700 and
 the agent renames that into place, so OpenVox Server — running as the `puppet`
@@ -124,3 +160,11 @@ populated skeleton at `code/environments/production`, and `rename(2)` cannot
 replace a real directory with a symlink. codavox owns
 `/opt/puppetlabs/codavox/environments` instead, which is also what PE's versioned
 deploys do with `/etc/puppetlabs/puppetserver/code`.
+
+**Revocation checked only at the TLS handshake did nothing.** The publisher
+refused revoked certificates in `VerifyConnection`, which runs when a connection
+is established — and a running agent polls over one keep-alive connection and
+never handshakes again, so a revoked compiler kept fetching code indefinitely.
+Every Go test passed, because `agent --once` is a fresh process and therefore a
+fresh connection on every sync. Only a real daemon holding a real connection
+shows it. The publisher now also checks per request.
