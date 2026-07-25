@@ -38,6 +38,7 @@
     "golangci",
     "goreleaser",
     "gosec",
+    "govulncheck",
     "gzip",
     "headless",
     "HMAC",
@@ -88,6 +89,8 @@
     "resealing",
     "revive",
     "rpmbuild",
+    "rspec",
+    "rubocop",
     "rugged",
     "setgid",
     "setuid",
@@ -104,6 +107,7 @@
     "umasks",
     "undeployed",
     "unlinks",
+    "voxbox",
     "voxpupuli"
   ],
   "ignoreRegExpList": [

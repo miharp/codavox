@@ -16,7 +16,7 @@ are not `go` commands:
 
 ```console
 go test -run '^$' -fuzz FuzzExtractArchive -fuzztime 60s ./internal/seal/
-find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck --external-sources
+{ find . -name '*.sh' -not -path './.git/*'; find .githooks -type f; } | tr '\n' '\0' | xargs -0 shellcheck --external-sources
 npx cspell '**/*.md'           # docs only; add terms to cspell.json, do not reword
 govulncheck ./...
 ```
@@ -127,16 +127,37 @@ changed. Include the reasoning that would otherwise be lost, especially where a
 constraint from OpenVox Server's contract drove the design.
 
 Commits are **DCO signed-off** and **GPG-signed**, the way OpenVox projects
-expect. A `prepare-commit-msg` hook appends the `Signed-off-by` trailer for you;
-enable it once per clone, and turn on commit signing:
+expect. A `prepare-commit-msg` hook appends the `Signed-off-by` trailer for you.
+Enable it once per clone, and turn on commit signing:
 
 ```console
 git config core.hooksPath .githooks
 git config commit.gpgsign true
 ```
 
-The hook adds the trailer only when one is not already present, so `git commit
--s` still works. Signing needs a GPG key registered with your forge account.
+Signing needs a GPG key registered with your forge account.
+
+### Crediting a co-author
+
+Work done with an AI assistant carries a `Co-Authored-By` trailer. Configure the
+identity once per clone and the hook adds it:
+
+```console
+git config codavox.coauthor "Co-Authored-By: <name> <email>"
+```
+
+Use whatever identity your assistant documents for itself — there is no shared
+registry of these, and vendors differ. The hook accepts any value and validates
+none, so it works the same for any tool. `--add` sets more than one, to credit a
+person and a tool on the same commit.
+
+Leave it unset and only the sign-off is added: the hook never claims a co-author
+you did not have, which is the reason it is opt-in rather than built in.
+
+Both trailers are appended as one contiguous block, because git stops parsing
+trailers at a blank line — a gap would turn one block it understands into two it
+does not. Each is added only when absent, so `git commit -s` still works and
+re-running the hook never duplicates one.
 
 ## Documentation
 

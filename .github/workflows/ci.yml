@@ -131,11 +131,15 @@ jobs:
       # The integration harness and the package's postinstall script are shell,
       # and both run somewhere a failure is expensive to debug: inside a
       # container topology, or on an operator's machine mid-install.
+      #
+      # The git hooks are shell too but carry no extension, so a *.sh glob misses
+      # them — and they run on every commit, where a syntax error is caught by
+      # whoever happens to commit next.
       - name: Lint shell scripts
         run: |
           shellcheck --version
-          find . -name '*.sh' -not -path './.git/*' -print0 |
-            xargs -0 shellcheck --external-sources
+          { find . -name '*.sh' -not -path './.git/*'; find .githooks -type f; } |
+            tr '\n' '\0' | xargs -0 shellcheck --external-sources
 
   spelling:
     name: cspell
