@@ -168,7 +168,7 @@ func ExtractArchive(r io.Reader, dir string) error {
 
 func extractEntry(root *os.Root, dir string, tr *tar.Reader, hdr *tar.Header) error {
 	name := filepath.Clean(hdr.Name)
-	if filepath.IsAbs(name) || name == ".." || len(name) > 1 && name[:3] == ".."+string(filepath.Separator) {
+	if escapesTree(name) {
 		return fmt.Errorf("refusing archive entry with escaping path %q", hdr.Name)
 	}
 
@@ -217,6 +217,19 @@ func extractEntry(root *os.Root, dir string, tr *tar.Reader, hdr *tar.Header) er
 	default:
 		return fmt.Errorf("unsupported archive entry type %q at %s", hdr.Typeflag, name)
 	}
+}
+
+// escapesTree reports whether a cleaned archive entry path leaves the tree.
+//
+// filepath.Clean has already collapsed any interior "..", so an escaping
+// relative path can only begin with one. Matching that prefix with
+// strings.HasPrefix rather than a slice keeps short names safe: an ordinary
+// two-character entry like "ca" is shorter than the prefix being compared, and
+// slicing it would panic on a path an operator is perfectly entitled to commit.
+func escapesTree(name string) bool {
+	return filepath.IsAbs(name) ||
+		name == ".." ||
+		strings.HasPrefix(name, ".."+string(filepath.Separator))
 }
 
 // mkdirAllIn creates dir and its parents beneath root, staying confined.

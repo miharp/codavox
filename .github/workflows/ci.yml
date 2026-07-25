@@ -92,6 +92,38 @@ jobs:
       - name: Report coverage
         run: go tool cover -func=coverage.out | tail -1
 
+  fuzz:
+    name: Fuzz the artifact extractor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Extraction is the only place codavox parses untrusted bytes: the
+      # artifact is unpacked before its code_id can be verified, so a malformed
+      # or hostile one reaches this code first. A panic here crash-loops the
+      # agent on every compiler at once.
+      #
+      # A short run per PR is the point — it re-checks the seed corpus and
+      # explores a little further each time, rather than trying to be an
+      # exhaustive search. This caught a real crash on two-character entry
+      # names, which ordinary control repos contain.
+      - name: Fuzz ExtractArchive
+        run: go test -run '^$' -fuzz FuzzExtractArchive -fuzztime 60s ./internal/seal/
+
+      # A crash leaves its input in testdata/fuzz; keep it so the failure can be
+      # reproduced locally and committed as a regression seed.
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: internal/seal/testdata/fuzz/
+          retention-days: 14
+
   bench:
     name: Benchmarks
     runs-on: ubuntu-latest
