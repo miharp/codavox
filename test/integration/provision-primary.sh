@@ -26,6 +26,23 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 
+# The publisher refuses revoked certificates, so it needs the host copy of the
+# CA's CRL at the standard path — the same file puppetserver's ssl-crl-path
+# points at. A CA-bearing primary may only have the authoritative copy under the
+# CA directory, depending on how it was bootstrapped, so link the host path to it
+# rather than snapshotting: a later revocation must be visible here immediately.
+SSLDIR=/etc/puppetlabs/puppet/ssl
+CA_CRL=/etc/puppetlabs/puppetserver/ca/ca_crl.pem
+if [ ! -e "${SSLDIR}/crl.pem" ]; then
+  if [ -f "$CA_CRL" ]; then
+    echo "[primary] linking ${SSLDIR}/crl.pem -> ${CA_CRL}"
+    ln -sf "$CA_CRL" "${SSLDIR}/crl.pem"
+  else
+    echo "[primary] no CRL at ${SSLDIR}/crl.pem or ${CA_CRL}" >&2
+    exit 1
+  fi
+fi
+
 echo "[primary] seeding ${STAGING}/production"
 mkdir -p "${STAGING}/production/manifests"
 cat > "${STAGING}/production/manifests/site.pp" <<'PP'

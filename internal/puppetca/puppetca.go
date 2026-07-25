@@ -5,15 +5,22 @@
 // deployment has been enrolled with the primary's CA already: the agent run
 // that joins a compiler to the pool leaves it a signed certificate, a private
 // key, the CA certificate, and a CRL, all at well-known paths. Reusing them
-// means there is no second PKI to provision, distribute, rotate, or revoke —
-// and revoking a compiler's Puppet certificate revokes its access to code as a
-// side effect, which is the behavior an operator would expect.
+// means there is no second PKI to provision, distribute, rotate, or revoke.
+//
+// Revoking a compiler's Puppet certificate revokes its access to code, because
+// the publisher checks the same CRL. That is enforced rather than assumed: a
+// certificate signed by the CA stays cryptographically valid after revocation,
+// so nothing about mutual TLS alone would stop a revoked node from fetching
+// every environment. PE takes the same approach — its Puppet module sets
+// ssl-crl-path to $ssldir/crl.pem on every service listener, and leaves
+// puppetserver on puppet.conf's certificate_revocation default of "chain".
 package puppetca
 
 import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -59,37 +66,100 @@ func (p Paths) CRL() string { return filepath.Join(p.SSLDir, "crl.pem") }
 
 // Load reads the CA certificate pool and the node's keypair.
 func (p Paths) Load() (tls.Certificate, *x509.CertPool, error) {
+	cert, pool, _, err := p.load()
+	return cert, pool, err
+}
+
+// load additionally returns the parsed CA certificates, which CRL verification
+// needs: a pool can only build chains, and checking a CRL's signature requires
+// the issuing certificate itself.
+func (p Paths) load() (tls.Certificate, *x509.CertPool, []*x509.Certificate, error) {
 	cert, err := tls.LoadX509KeyPair(p.Cert(), p.Key())
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("loading keypair for %s: %w", p.CertName, err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("loading keypair for %s: %w", p.CertName, err)
 	}
 
-	pem, err := os.ReadFile(p.CACert())
+	pemBytes, err := os.ReadFile(p.CACert())
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("reading CA certificate: %w", err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("reading CA certificate: %w", err)
 	}
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return tls.Certificate{}, nil, fmt.Errorf("no certificates found in %s", p.CACert())
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("no certificates found in %s", p.CACert())
 	}
 
-	return cert, pool, nil
+	cas, err := parseCertificates(pemBytes)
+	if err != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("parsing %s: %w", p.CACert(), err)
+	}
+
+	return cert, pool, cas, nil
+}
+
+// parseCertificates decodes every CERTIFICATE block in a PEM bundle.
+func parseCertificates(pemBytes []byte) ([]*x509.Certificate, error) {
+	var (
+		certs []*x509.Certificate
+		rest  = pemBytes
+	)
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		certs = append(certs, cert)
+	}
+	return certs, nil
+}
+
+// ServerPolicy is who the publisher will admit.
+type ServerPolicy struct {
+	// AllowedRoles are the pp_role values permitted to fetch code. At least one
+	// is required.
+	AllowedRoles []string
+	// Revocation selects CRL checking. The zero value is RevocationChain,
+	// matching Puppet's certificate_revocation default.
+	Revocation RevocationMode
 }
 
 // ServerTLS builds a TLS configuration for the publisher, admitting only peers
-// whose certificate carries one of allowedRoles.
+// whose certificate carries one of the allowed roles and is not revoked.
 //
-// The role constraint is part of this constructor rather than something the
-// caller bolts on, because verifying against the CA alone admits every node in
-// the estate — each one holds an agent certificate from the same authority.
-func (p Paths) ServerTLS(allowedRoles ...string) (*tls.Config, error) {
-	if len(allowedRoles) == 0 {
+// Both constraints live in this constructor rather than being bolted on by the
+// caller, because verifying against the CA alone admits every node in the
+// estate — each one holds an agent certificate from the same authority, and a
+// revoked one keeps holding it.
+func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, error) {
+	if len(policy.AllowedRoles) == 0 {
 		return nil, errors.New("at least one allowed pp_role is required")
 	}
+	mode := policy.Revocation
+	if mode == "" {
+		mode = RevocationChain
+	}
 
-	cert, pool, err := p.Load()
+	cert, pool, cas, err := p.load()
 	if err != nil {
 		return nil, err
+	}
+
+	verify := VerifyConnectionRole(policy.AllowedRoles...)
+	if mode != RevocationDisabled {
+		// PE points ssl-crl-path at $ssldir/crl.pem on every service listener;
+		// this is the same file.
+		crl, err := newCRLChecker(p.CRL(), cas)
+		if err != nil {
+			return nil, err
+		}
+		verify = chainVerifiers(verify, revocationVerifier(crl, mode))
 	}
 
 	return &tls.Config{
@@ -99,9 +169,36 @@ func (p Paths) ServerTLS(allowedRoles ...string) (*tls.Config, error) {
 		MinVersion:   tls.VersionTLS12,
 		// VerifyConnection, not VerifyPeerCertificate: the latter is skipped
 		// entirely on resumed sessions, so a peer that handshook once could
-		// keep reconnecting without the role ever being rechecked.
-		VerifyConnection: VerifyConnectionRole(allowedRoles...),
+		// keep reconnecting without the role or the CRL ever being rechecked.
+		// Revocation especially must not be a one-time check.
+		VerifyConnection: verify,
 	}, nil
+}
+
+// revocationVerifier rejects a peer whose certificate is on the CRL.
+func revocationVerifier(crl *crlChecker, mode RevocationMode) func(tls.ConnectionState) error {
+	return func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return errors.New("no peer certificate presented")
+		}
+		certs := cs.PeerCertificates
+		if mode == RevocationLeaf {
+			certs = certs[:1]
+		}
+		return crl.check(certs)
+	}
+}
+
+// chainVerifiers runs each check in order, stopping at the first failure.
+func chainVerifiers(fns ...func(tls.ConnectionState) error) func(tls.ConnectionState) error {
+	return func(cs tls.ConnectionState) error {
+		for _, fn := range fns {
+			if err := fn(cs); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // ServerCertTLS builds a server TLS configuration that presents the node's

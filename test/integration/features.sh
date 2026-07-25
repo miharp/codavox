@@ -112,6 +112,33 @@ else
   fail "version directories grew to $count (prune not reaping)"
 fi
 
+# Feature 7: revoking a compiler's Puppet certificate revokes its access to code.
+# The certificate stays cryptographically valid and keeps its pp_role, so only
+# the CRL check stops it — and it must take effect without restarting anything.
+#
+# This runs last: the compiler cannot fetch code afterwards.
+log "Feature 7 — revoking a compiler's certificate cuts off its access to code"
+before=$(code_id "$COMPILER" production)
+docker exec "$PRIMARY" /opt/puppetlabs/bin/puppetserver ca revoke --certname compiler >/dev/null 2>&1 \
+  || fail "could not revoke the compiler's certificate"
+
+bump_and_reseal
+sleep 10
+
+after=$(code_id "$COMPILER" production)
+if [ "$after" = "$before" ]; then
+  pass "revoked compiler stayed at $before and received no new code"
+else
+  fail "a revoked compiler still fetched code ($before -> $after)"
+fi
+
+# The publisher must say why, rather than failing silently.
+if docker logs "$PRIMARY" 2>&1 | grep -qi "revoked"; then
+  pass "the publisher logged the refusal"
+else
+  fail "the publisher refused the compiler without saying it was revoked"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   printf '\033[1;32mALL FEATURES PASSED\033[0m\n'

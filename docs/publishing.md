@@ -45,6 +45,38 @@ codavox reuses them. There is nothing to provision, distribute, or rotate, and
 revoking a compiler's Puppet certificate revokes its access to code as a side
 effect — which is what an operator would expect to happen.
 
+## Revocation: enforced, not assumed
+
+That side effect is a real check, not a hope. A revoked certificate stays
+cryptographically valid and keeps its `pp_role`, so mutual TLS on its own would
+go on admitting a compiler forever after you revoked it.
+
+The publisher therefore reads `<ssldir>/crl.pem` — the same file every other
+Puppet service checks — and refuses any peer whose certificate appears on it.
+This follows PE, whose Puppet module sets `ssl-crl-path` to `$ssldir/crl.pem` on
+every service listener and leaves puppetserver on puppet.conf's
+`certificate_revocation` default.
+
+`publish.certificate_revocation` takes Puppet's own values:
+
+| value | effect |
+|---|---|
+| `chain` | check every certificate the peer presented. **Default**, as in Puppet. |
+| `leaf` | check only the peer's own certificate. |
+| `false` | skip the CRL entirely. |
+
+Two properties follow from how it is implemented, and both are deliberate:
+
+- **The CRL is re-read when it changes**, checked by a stat per handshake.
+  Revoking a compiler is incident response, so
+  `puppetserver ca revoke --certname compiler02.example.com` takes effect
+  without restarting any publisher.
+- **A missing or unverifiable CRL is a startup error**, not a silent downgrade
+  to "nothing is revoked". The CRL's signature is checked against the CA
+  bundle, so a CRL written by anyone other than your CA is refused rather than
+  believed. An estate that distributes no CRL sets `certificate_revocation` to
+  `false` and says so out loud.
+
 ## Authorization: CA membership is not enough
 
 Requiring a certificate signed by the Puppet CA proves only that the peer is

@@ -366,3 +366,72 @@ func TestAgentWithoutCompilerRoleIsRefused(t *testing.T) {
 		t.Error("an unauthorized node deployed an environment")
 	}
 }
+
+// Revoking a compiler's Puppet certificate must revoke its access to code. The
+// certificate stays cryptographically valid and keeps its pp_role, so mutual
+// TLS alone would go on admitting it — only the CRL check does not.
+//
+// The publisher is not restarted between the two syncs: an operator running
+// `puppetserver ca revoke` during an incident expects it to take effect, not to
+// wait on a rolling restart of every publisher.
+func TestRevokedCompilerLosesAccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary and binds a port")
+	}
+
+	bin := build(t)
+	ca := testca.New(t)
+
+	staging := t.TempDir()
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "secret\n"})
+
+	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
+	const addr = "127.0.0.1:18155"
+
+	pub := &publisher{bin: bin, staging: staging, addr: addr, ssldir: serverSSL}
+	pub.restart(t)
+	t.Cleanup(pub.stop)
+
+	c := newCompiler(t, ca, "compiler01.example.com")
+
+	var err error
+	for range 40 {
+		if err = c.syncOnce(t, bin, pub.url()); err == nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("compiler never synced before revocation: %v", err)
+	}
+
+	// Revoke it in the CA's CRL, which is the file the publisher reads.
+	ca.WriteCRL(t, serverSSL, testca.CertFor(t, c.ssldir, c.name))
+	later := time.Now().Add(time.Second)
+	if err := os.Chtimes(filepath.Join(serverSSL, "crl.pem"), later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance the served code so a refusal cannot be confused with "nothing to do".
+	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "rotated\n"})
+	pub.hup(t)
+
+	var syncErr error
+	for range 20 {
+		if syncErr = c.syncOnce(t, bin, pub.url()); syncErr != nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if syncErr == nil {
+		t.Fatal("a revoked compiler still fetched code")
+	}
+
+	body, err := os.ReadFile(filepath.Join(c.envPath, "production", "manifests/site.pp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "secret\n" {
+		t.Errorf("a revoked compiler received new code: %q", body)
+	}
+}
