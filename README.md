@@ -8,11 +8,17 @@ report exactly which version it is serving. You deploy from your control repo
 the way you already do; codavox makes sure every compiler ends up serving
 identical, fully resolved code — and can prove which version that is.
 
-**Status: early development.** The whole chain works and has run against real
-OpenVox Server: a deploy runs r10k and distributes the result, two compilers
-converge, a compiler that missed a deploy catches up on its own, and an agent
-receives a catalog stamped with the exact code version. It has not yet been
-packaged for production use.
+**Status: early development.** The whole chain works and is exercised on every
+push against real OpenVox Server processes: a deploy runs r10k and distributes
+the result, a compiler that missed a deploy catches up on its own, an agent
+receives a catalog stamped with the exact code version, and revoking a
+compiler's certificate cuts off its access to code.
+
+It ships as rpm and deb for `linux/amd64` and `linux/arm64`, with systemd units
+and a Puppet module ([miharp/puppet-codavox](https://github.com/miharp/puppet-codavox))
+to configure it. What "early" still means: no package repository, so installs
+are by URL; the version numbers are `0.x` and the on-disk layout may yet change;
+and it has not run anywhere but a test estate.
 
 ## Coming from Puppet Enterprise?
 
@@ -125,13 +131,13 @@ latest release, then install by URL:
 
 ```console
 # RPM — Rocky, RHEL, AlmaLinux, CentOS Stream
-VERSION=0.2.1
+VERSION=0.3.0
 dnf install "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.rpm"
 ```
 
 ```console
 # DEB — Debian, Ubuntu
-VERSION=0.2.1
+VERSION=0.3.0
 curl -fsSLO "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.deb"
 apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 ```

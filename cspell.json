@@ -51,6 +51,7 @@
     "ldflags",
     "libgit",
     "markdownlint",
+    "miharp",
     "misspell",
     "mtime",
     "mtimes",
