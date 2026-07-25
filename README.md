@@ -169,10 +169,10 @@ from `puppet-code`:
 
 ```console
 # publisher (run as a service), pointed at r10k's basedir
-$ codavox publish --staging /etc/puppetlabs/code-staging
+$ codavox publish --staging /etc/puppetlabs/code/environments
 
 # deploy: runs r10k, packages the result, and serves it — waiting until it is live
-$ codavox deploy production --wait --staging /etc/puppetlabs/code-staging
+$ codavox deploy production --wait --staging /etc/puppetlabs/code/environments
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
 ```
 
@@ -231,6 +231,7 @@ by design. See [design.md](docs/design.md) for the full rationale.
 
 | document | contents |
 |---|---|
+| [production.md](docs/production.md) | Running it for real: ports, sizing, failure modes, rollout, and monitoring |
 | [configuration.md](docs/configuration.md) | The shared config file: location, precedence, and every setting |
 | [deploying.md](docs/deploying.md) | `codavox deploy`: r10k, the reseal trigger, `--wait` |
 | [deploy-server.md](docs/deploy-server.md) | The deploy API and push webhook; deploy status and history |

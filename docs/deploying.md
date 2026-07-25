@@ -5,7 +5,7 @@
 primary. It is the familiar `puppet-code deploy` verb, for OpenVox Server.
 
 ```console
-$ codavox deploy production --staging /etc/puppetlabs/code-staging
+$ codavox deploy production --staging /etc/puppetlabs/code/environments
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)
 ```
 
@@ -52,7 +52,7 @@ With `--wait`, it blocks until the publisher has materialized the artifact for
 each new `code_id`, then reports `serving`:
 
 ```console
-$ codavox deploy production --wait --staging /etc/puppetlabs/code-staging
+$ codavox deploy production --wait --staging /etc/puppetlabs/code/environments
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
 ```
 
