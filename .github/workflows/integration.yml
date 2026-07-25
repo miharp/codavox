@@ -4,14 +4,37 @@
 # with plain shell — no ovadm — and exercises every feature against real
 # puppetserver processes.
 #
-# Not gated on pull requests: it installs openvox-server and boots two JVMs, too
-# heavy for every PR. Runs on push to main and on demand.
+# It installs openvox-server and boots two JVMs, so it is too heavy to gate every
+# pull request. It runs on push to main, on demand, and on the pull requests it
+# is the only check for — see the paths filter below.
 name: Integration
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+  # These paths have no other verification. A change to a workflow, to the
+  # packaging, or to the harness itself passes every Go test and static gate
+  # while being completely unexercised, so the first time it runs is after it
+  # has merged — which is how a goreleaser-action bump nearly reached a tag
+  # unverified, and how an agent bug reached main. Depending on someone
+  # remembering to dispatch this by hand is not a control.
+  #
+  # Deliberately not listing internal/**: the harness would then gate most
+  # pull requests, and CONTRIBUTING.md already asks for a local run when a
+  # change touches TLS or the agent's HTTP client.
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.goreleaser.yaml'
+      - 'packaging/**'
+      - 'test/integration/**'
+
+# One run per ref: superseded pushes to a pull request should not queue up
+# 30-minute jobs behind each other.
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

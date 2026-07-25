@@ -65,8 +65,12 @@ Requires Docker and [GoReleaser](https://goreleaser.com); takes a few minutes.
 See [test/integration/README.md](test/integration/README.md) for the topology,
 what each feature asserts, and how to debug a failed run.
 
-**Run it before a pull request that touches TLS, the agent's HTTP client,
-packaging, or the systemd units.** Those are the areas where a change can pass
+CI runs it for you on a pull request that changes a workflow, the packaging, or
+the harness itself — the paths where nothing else would exercise the change. It
+always runs on push to `main`.
+
+**Run it yourself before a pull request that touches TLS, the agent's HTTP
+client, packaging, or the systemd units.** Those are the areas where a change can pass
 every Go test and still be broken in production, because the tests do not
 reproduce the shape of the deployed system:
 
