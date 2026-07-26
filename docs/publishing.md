@@ -245,6 +245,12 @@ is the property that lets a compiler behind a firewall converge at all.
 An agent that changes anything reports again before it finishes, so the view is
 current the moment a compiler converges rather than at its next poll.
 
+A peer appears here once it does something only a compiler does — fetch an
+artifact, or report what it is serving. Polling alone is not enough: an operator
+running `curl` against `/v1/environments` is also polling, and used to be listed
+as a compiler reporting `(not reported)`. A new compiler still appears
+immediately, because it fetches on its first poll.
+
 `fetched` and the counters are weaker: they are what the publisher watched
 happen. An agent that downloaded an artifact can still have failed to verify or
 unpack it, which is exactly why the agent reports the symlink rather than

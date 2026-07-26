@@ -103,14 +103,33 @@ func (p *Peers) state(certname string) *peerState {
 	return st
 }
 
-// observePoll records that a compiler asked which versions are current.
+// observePoll records a poll against a compiler already known to be one.
+//
+// It deliberately does not create an entry. Polling proves only that something
+// authorized asked which versions are current, and an operator running `curl` or
+// a health check against /v1/environments does exactly that — which used to add
+// them to the fleet view as a compiler reporting "(not reported)", the same
+// display an operator is told to investigate.
+//
+// A compiler earns its entry by doing something only a compiler does: fetching an
+// artifact, or reporting what it is serving. A brand-new one fetches on its first
+// poll because it has nothing, so it still appears immediately, and thereafter
+// polls keep its last_seen fresh through here.
+//
+// The alternative fixes are all worse. Skipping the publisher's own certname
+// would erase a self-compiling primary that legitimately runs an agent. Filtering
+// on a client header would erase every agent too old to send it, exactly during
+// the rolling upgrade when the view matters most.
 func (p *Peers) observePoll(certname string, at time.Time) {
 	if p == nil || certname == "" {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	st := p.state(certname)
+	st, known := p.seen[certname]
+	if !known {
+		return
+	}
 	st.lastSeen = at
 	st.lastPoll = at
 	st.polls++

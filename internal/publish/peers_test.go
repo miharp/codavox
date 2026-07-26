@@ -20,6 +20,8 @@ func TestPeersRecordsPollsAndFetches(t *testing.T) {
 	p := NewPeers()
 	base := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 
+	// The first poll is what a brand-new compiler does before it has anything to
+	// report, and it creates nothing — the fetch that follows is what admits it.
 	p.observePoll("compiler01.example.com", base)
 	p.observeFetch("compiler01.example.com", "production", "abc123", base.Add(time.Second))
 	p.observePoll("compiler01.example.com", base.Add(30*time.Second))
@@ -33,8 +35,10 @@ func TestPeersRecordsPollsAndFetches(t *testing.T) {
 	if got.Certname != "compiler01.example.com" {
 		t.Errorf("certname = %q", got.Certname)
 	}
-	if got.Polls != 2 || got.Fetches != 1 {
-		t.Errorf("polls=%d fetches=%d, want 2 and 1", got.Polls, got.Fetches)
+	// One poll counted, not two: the pre-admission one is not attributed to a
+	// compiler that was not yet known to be one.
+	if got.Polls != 1 || got.Fetches != 1 {
+		t.Errorf("polls=%d fetches=%d, want 1 and 1", got.Polls, got.Fetches)
 	}
 	// last_seen tracks any request, so a compiler with nothing to fetch still
 	// looks alive.
@@ -53,8 +57,12 @@ func TestPeersConvergedCompilerPollsWithoutFetching(t *testing.T) {
 	p := NewPeers()
 	now := time.Now().UTC()
 
+	// A converged agent reports what it serves on every poll, which is what keeps
+	// it in the view without ever fetching again.
 	for i := range 10 {
-		p.observePoll("compiler01.example.com", now.Add(time.Duration(i)*30*time.Second))
+		at := now.Add(time.Duration(i) * 30 * time.Second)
+		p.observeServing("compiler01.example.com", map[string]string{"production": "abc123"}, at)
+		p.observePoll("compiler01.example.com", at)
 	}
 
 	got := p.List()[0]
@@ -77,10 +85,12 @@ func TestPeersOrdersByMostRecentlySeen(t *testing.T) {
 	p := NewPeers()
 	base := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 
-	p.observePoll("old.example.com", base)
-	p.observePoll("recent.example.com", base.Add(time.Minute))
+	// Reported rather than polled, because a bare poll no longer admits a peer.
+	serving := map[string]string{"production": "abc123"}
+	p.observeServing("old.example.com", serving, base)
+	p.observeServing("recent.example.com", serving, base.Add(time.Minute))
 	// Same instant as recent: the tiebreak is the name, so the order is stable.
-	p.observePoll("also-recent.example.com", base.Add(time.Minute))
+	p.observeServing("also-recent.example.com", serving, base.Add(time.Minute))
 
 	var names []string
 	for _, peer := range p.List() {
@@ -124,12 +134,22 @@ func TestPeersConcurrentObservations(t *testing.T) {
 	}
 	wg.Wait()
 
-	var total uint64
+	// Fetches are the deterministic count: every one of them admits or updates a
+	// peer. Polls are not, because a poll arriving before that certname's first
+	// fetch is deliberately not attributed to a compiler that is not yet known to
+	// be one — so the number depends on goroutine interleaving. The assertion
+	// worth making is that nothing was lost or double-counted, and that -race
+	// sees no torn state.
+	var polls, fetches uint64
 	for _, peer := range p.List() {
-		total += peer.Polls
+		polls += peer.Polls
+		fetches += peer.Fetches
 	}
-	if total != 50 {
-		t.Errorf("recorded %d polls, want 50", total)
+	if fetches != 50 {
+		t.Errorf("recorded %d fetches, want 50", fetches)
+	}
+	if polls > 50 {
+		t.Errorf("recorded %d polls from 50 requests", polls)
 	}
 }
 
@@ -155,17 +175,24 @@ func TestHandlerRecordsPeersFromRequests(t *testing.T) {
 
 	current := s.Environments()["production"]
 
-	resp, err := http.Get(srv.URL + EnvironmentsPath)
-	if err != nil {
-		t.Fatal(err)
+	get := func(path string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
 	}
-	_ = resp.Body.Close()
 
-	resp, err = http.Get(srv.URL + ArtifactPath("production", current))
-	if err != nil {
-		t.Fatal(err)
+	// The sequence a brand-new compiler actually produces: it polls with nothing
+	// to report, fetches because it has no code, then polls again.
+	get(EnvironmentsPath)
+	if got := peers.List(); len(got) != 0 {
+		t.Fatalf("a bare poll created a peer: %+v", got)
 	}
-	_ = resp.Body.Close()
+
+	get(ArtifactPath("production", current))
+	get(EnvironmentsPath)
 
 	list := peers.List()
 	if len(list) != 1 {
@@ -181,7 +208,7 @@ func TestHandlerRecordsPeersFromRequests(t *testing.T) {
 	}
 
 	// And the fleet view reports it as JSON.
-	resp, err = http.Get(srv.URL + CompilersPath)
+	resp, err := http.Get(srv.URL + CompilersPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,4 +397,70 @@ func TestPeersListCopiesServing(t *testing.T) {
 	if got := p.List()[0].Serving["production"]; got != "abc" {
 		t.Errorf("serving = %q after a caller mutated its copy, want abc", got)
 	}
+}
+
+// The reported bug (#47): running `curl /v1/environments` from the publisher, with
+// that node's own certificate, added it to its own fleet view as a compiler
+// reporting "(not reported)" — the same display an operator is told to
+// investigate. Polling proves only that something authorized asked a question.
+func TestPollingAloneDoesNotCreateACompiler(t *testing.T) {
+	p := NewPeers()
+	now := time.Now().UTC()
+
+	for range 20 {
+		p.observePoll("puppet.example.com", now)
+	}
+
+	if got := p.List(); len(got) != 0 {
+		t.Errorf("polling alone created %d peers: %+v", len(got), got)
+	}
+}
+
+// The three properties the fix must not break, each of which rules out one of the
+// simpler fixes considered for #47.
+func TestPollingAdmitsRealCompilers(t *testing.T) {
+	now := time.Now().UTC()
+
+	// A brand-new compiler has nothing to report, so its first poll is silent —
+	// but it fetches immediately, because it has no code. Ruling out "only record
+	// peers that report serving", which would have hidden it until it converged.
+	t.Run("new compiler is admitted by its first fetch", func(t *testing.T) {
+		p := NewPeers()
+		p.observePoll("compiler01.example.com", now)
+		p.observeFetch("compiler01.example.com", "production", "abc123", now)
+		if got := p.List(); len(got) != 1 {
+			t.Fatalf("a fetching compiler was not recorded: %+v", got)
+		}
+	})
+
+	// A self-compiling primary runs a real agent against its own publisher, and
+	// must appear. Rules out "skip the publisher's own certname".
+	t.Run("the publisher's own certname is admitted when it really is a compiler", func(t *testing.T) {
+		p := NewPeers()
+		p.observeServing("puppet.example.com", map[string]string{"production": "abc123"}, now)
+		p.observePoll("puppet.example.com", now)
+		got := p.List()
+		if len(got) != 1 || got[0].Serving["production"] != "abc123" {
+			t.Fatalf("a self-compiling primary was dropped: %+v", got)
+		}
+	})
+
+	// An agent too old to send the serving header still fetches, so it keeps its
+	// entry and its polls keep it fresh. Rules out filtering on a client header,
+	// which would blind the view during the rolling upgrade that most needs it.
+	t.Run("an agent that never reports serving stays visible", func(t *testing.T) {
+		p := NewPeers()
+		p.observeFetch("old.example.com", "production", "abc123", now)
+		p.observePoll("old.example.com", now.Add(time.Minute))
+		got := p.List()
+		if len(got) != 1 {
+			t.Fatalf("an old agent was dropped: %+v", got)
+		}
+		if got[0].Polls != 1 {
+			t.Errorf("polls = %d, want 1: an admitted peer's polls still count", got[0].Polls)
+		}
+		if len(got[0].Serving) != 0 {
+			t.Errorf("serving = %+v, want empty for an agent that cannot report", got[0].Serving)
+		}
+	})
 }
