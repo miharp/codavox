@@ -14,6 +14,7 @@ you know it is working.
 - [Monitoring](#monitoring)
 - [Upgrades and version skew](#upgrades-and-version-skew)
 - [Backup and rebuild](#backup-and-rebuild)
+- [Removing an environment](#removing-an-environment)
 - [Decommissioning a compiler](#decommissioning-a-compiler)
 
 ## Before you start
@@ -378,6 +379,89 @@ deploys cannot be reconstructed after the fact. Losing it costs you the
 
 A rebuilt primary re-seals the same basedir to the **same `code_id`**,
 because sealing is reproducible. Compilers see no change and download nothing.
+
+## Removing an environment
+
+Deleting a branch and redeploying removes the environment from the primary, and
+the publisher stops advertising it:
+
+```console
+$ r10k deploy environment -v -p
+INFO -> Removing unmanaged path /etc/puppetlabs/code/environments/testing
+
+$ curl .../v1/environments
+{"production":"835b1663c475…"}
+```
+
+**That does not remove it from any compiler.** Every compiler keeps the
+environment it already has, and catalogs for it keep compiling:
+
+```console
+$ ls /opt/puppetlabs/codavox/environments/     # on each compiler
+production  testing
+
+$ puppet agent -t --environment testing
+Notice: Catalog compiled by compiler01.example.com
+Notice: Applied catalog in 0.06 seconds
+```
+
+This is deliberate, and it is the same rule as everywhere else here: the agent
+adds and updates, and never deletes on its own. A publisher that comes up
+pointed at an empty directory advertises nothing, and an agent that treated
+"nothing advertised" as "delete everything" would take the entire fleet's code
+away over a configuration mistake. Deleting is opt-in because it is the one
+action that cannot be undone by fixing the publisher.
+
+The consequence is worth stating plainly: **if you deleted an environment
+because it contained something that should not be running, deleting it from the
+control repo does not stop it running.** Until you prune, every compiler still
+serves it to anything that asks for it by name.
+
+### Seeing what is left
+
+`codavox compilers` lists it, per node, so the remainder is visible rather than
+silent:
+
+```text
+COMPILER                ENVIRONMENT  CODE_ID       COMMIT        LAST POLL
+compiler01.example.com  production   835b1663c475  8cb7b0396b19  9s ago
+compiler02.example.com  production   835b1663c475  8cb7b0396b19  7s ago
+compiler02.example.com  testing      283116cf7877  52dd1cc66493  7s ago
+```
+
+compiler02 is still serving `testing`; compiler01 has pruned it. An environment
+appearing here that the publisher no longer advertises is exactly this case.
+
+### Completing the removal
+
+```yaml
+agent:
+  prune_environments: true
+```
+
+The agent then removes the environment on its next poll:
+
+```text
+level=INFO msg="pruned environment" environment=testing
+```
+
+Two details matter when you turn it on:
+
+- **The symlink goes immediately**, so new compiles for that environment fail
+  loudly. That is correct — the environment no longer exists — but it is abrupt
+  for anything still pointed at it, so check `codavox compilers` for who is
+  serving it before enabling.
+- **The version directories stay until `min_age`** (default `2h`). An agent run
+  that received a catalog stamped with that `code_id` still resolves file content
+  by it, and cutting that off would turn a successful run into a failed one. So
+  disk is not reclaimed at the moment of pruning.
+
+Pruning never acts on an empty advertisement, so a publisher misconfiguration
+still cannot cascade into a fleet-wide deletion:
+
+```text
+level=WARN msg="publisher advertised no environments; skipping prune"
+```
 
 ## Decommissioning a compiler
 
