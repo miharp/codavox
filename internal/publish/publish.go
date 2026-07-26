@@ -329,8 +329,11 @@ func (s *Store) handleEnvironments(peers *Peers) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		certname := peerCertname(r.TLS)
 		now := time.Now().UTC()
-		peers.observePoll(certname, now)
+		// Serving first: it is what admits a compiler to the fleet view, and
+		// observePoll only touches peers already known. Doing it the other way
+		// round would drop the first poll of every compiler from the count.
 		peers.observeServing(certname, ParseServing(r.Header.Get(ServingHeader)), now)
+		peers.observePoll(certname, now)
 		s.serveEnvironments(w)
 	}
 }
