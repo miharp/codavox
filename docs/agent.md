@@ -195,6 +195,39 @@ shows as `(not reported)`.
 One environment failing to sync does not stop the others. Failures are logged
 and retried on the next poll; the compiler keeps serving what it has.
 
+### Repeated failures are collapsed
+
+A publisher outage is survivable by design — this compiler keeps serving and
+catalogs keep compiling — so logging it at ERROR on every poll would describe a
+non-event as an emergency. At the default 30s interval that is 120 lines an hour
+per compiler, and a fleet through a maintenance window produces thousands.
+Anything alerting on ERROR then fires continuously for a state the design calls
+fine, which is how real alerts get muted.
+
+Going quiet would be the wrong correction: a log that stops mentioning a problem
+reads like the problem stopped. So repeats back off instead.
+
+| event | level |
+|---|---|
+| first failure of a run | `ERROR` |
+| a failure whose **cause changed** — unreachable, then a revoked certificate | `ERROR` |
+| repeats, at the 2nd, 4th, 8th, 16th … | `WARN`, carrying `consecutive` |
+| recovery | `INFO`, carrying `after_failed_attempts` |
+
+A two-hour outage at the default interval is 240 polls and **eight log lines**,
+which still says when it started, that it is ongoing, and when it ended:
+
+```text
+level=ERROR msg="sync failed" error="polling publisher: ... connection refused"
+level=WARN  msg="sync failed" error="..." consecutive=2
+level=WARN  msg="sync failed" error="..." consecutive=4
+...
+level=INFO  msg="sync recovered" after_failed_attempts=240
+```
+
+A cause that changes mid-outage is never swallowed as more of the same, because
+that is a different problem wearing the same shape.
+
 ## Verifying convergence
 
 The convergence test builds the real binaries, runs a publisher and two
