@@ -307,7 +307,7 @@ func (a *Agent) download(ctx context.Context, env, codeID string) error {
 
 	tmp, err := os.MkdirTemp(filepath.Dir(final), "."+layout.VersionDirName(env, codeID)+".*")
 	if err != nil {
-		return fmt.Errorf("creating staging directory: %w", err)
+		return fmt.Errorf("creating basedir directory: %w", err)
 	}
 	// Removing tmp is a no-op once it has been renamed away.
 	defer func() { _ = os.RemoveAll(tmp) }()
@@ -452,7 +452,7 @@ func (a *Agent) reapVersions(env, current string, keep int) error {
 // prune removes environments the publisher no longer advertises.
 //
 // It never acts on an empty advertisement: a publisher serving zero
-// environments is far more likely misconfigured, or pointed at an empty staging
+// environments is far more likely misconfigured, or pointed at an empty basedir
 // directory, than deliberately deleting every environment at once. Deleting the
 // last environment stays a manual action.
 // It reports whether it removed anything, so the caller can re-state what this

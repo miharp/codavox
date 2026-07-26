@@ -37,7 +37,7 @@ file 0644 2673a883...32d1   17 manifests/site.pp
 file 0644 7232560a...5688ee 17 modules/apache/init.pp
 ```
 
-**Sealing only reads the directory.** Staging remains r10k's job. Not owning
+**Sealing only reads the directory.** Populating it remains r10k's job. Not owning
 the deploy keeps the trust boundary small and lets existing r10k workflows
 continue untouched.
 

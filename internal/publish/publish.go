@@ -29,10 +29,10 @@ type sealedEnv struct {
 
 // Store holds sealed environments and the artifacts that reproduce them.
 type Store struct {
-	// StagingDir contains one directory per environment, as r10k deploys it.
-	StagingDir string
+	// BaseDir contains one directory per environment, as r10k deploys it.
+	BaseDir string
 	// ArtifactDir holds the materialized .tar.gz for each current version.
-	// Serving reads from here, never from StagingDir, so a compiler can never
+	// Serving reads from here, never from BaseDir, so a compiler can never
 	// observe a half-written tree from an r10k deploy that is still in progress.
 	ArtifactDir string
 
@@ -44,16 +44,16 @@ type Store struct {
 	prov *Log
 }
 
-// NewStore returns a Store reading environments from stagingDir and writing
+// NewStore returns a Store reading environments from baseDir and writing
 // materialized artifacts under artifactDir.
-func NewStore(stagingDir, artifactDir string) *Store {
-	return &Store{StagingDir: stagingDir, ArtifactDir: artifactDir, sealed: map[string]sealedEnv{}}
+func NewStore(baseDir, artifactDir string) *Store {
+	return &Store{BaseDir: baseDir, ArtifactDir: artifactDir, sealed: map[string]sealedEnv{}}
 }
 
 // EnableProvenance makes Reseal capture control-repo provenance into log.
 func (s *Store) EnableProvenance(log *Log) { s.prov = log }
 
-// Reseal rescans the staging directory, updates the published code_ids, and
+// Reseal rescans the basedir directory, updates the published code_ids, and
 // materializes an immutable artifact for each current version.
 //
 // Sealing is not done per request. It walks and hashes an entire environment,
@@ -61,19 +61,19 @@ func (s *Store) EnableProvenance(log *Log) { s.prov = log }
 // polling either side of an r10k run could otherwise observe different ids for
 // what is meant to be one deploy.
 //
-// Materializing the artifact here — rather than tarring the staging directory
+// Materializing the artifact here — rather than tarring the basedir directory
 // when a compiler asks for it — is what makes serving safe while r10k is
 // deploying. The bytes a compiler downloads are a snapshot taken when Reseal
-// ran, not whatever the staging directory happens to hold at request time, so a
+// ran, not whatever the basedir directory happens to hold at request time, so a
 // deploy in progress can never be streamed as a corrupt, half-written artifact.
 func (s *Store) Reseal() error {
 	if s.ArtifactDir == "" {
 		return fmt.Errorf("store has no artifact directory")
 	}
 
-	entries, err := os.ReadDir(s.StagingDir)
+	entries, err := os.ReadDir(s.BaseDir)
 	if err != nil {
-		return fmt.Errorf("reading staging directory: %w", err)
+		return fmt.Errorf("reading basedir directory: %w", err)
 	}
 
 	s.mu.RLock()
@@ -87,12 +87,12 @@ func (s *Store) Reseal() error {
 			continue
 		}
 		env := e.Name()
-		// Skip rather than fail: one badly named directory in the staging area
+		// Skip rather than fail: one badly named directory in the basedir area
 		// should not stop every other environment from being published.
 		if layout.ValidateEnvironment(env) != nil {
 			continue
 		}
-		envDir := filepath.Join(s.StagingDir, env)
+		envDir := filepath.Join(s.BaseDir, env)
 		id, err := seal.CodeID(envDir)
 		if err != nil {
 			// One environment failing must not stop the others being published,
@@ -151,7 +151,7 @@ func (s *Store) Reseal() error {
 }
 
 // ErrPartialReseal means some environments sealed and others did not. Callers
-// distinguish it from a hard failure — an unreadable staging directory, say —
+// distinguish it from a hard failure — an unreadable basedir directory, say —
 // because the publisher can still serve everything that did seal, and refusing
 // to start over one broken environment would strand the whole estate.
 var ErrPartialReseal = errors.New("reseal incomplete")

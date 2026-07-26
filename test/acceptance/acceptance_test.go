@@ -13,7 +13,7 @@
 // Point it at a real resolved tree (an r10k basedir's environment) to get
 // real-shape numbers instead of the synthetic fixture:
 //
-//	CODAVOX_ACCEPTANCE=1 CODAVOX_ACCEPTANCE_TREE=/etc/puppetlabs/code-staging/production \
+//	CODAVOX_ACCEPTANCE=1 CODAVOX_ACCEPTANCE_TREE=/etc/puppetlabs/code/environments/production \
 //	  go test -v ./test/acceptance/
 package acceptance
 

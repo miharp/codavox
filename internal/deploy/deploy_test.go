@@ -16,11 +16,11 @@ import (
 // exits with exitCode. It ignores its arguments and materializes a fixed tree,
 // which is all Run needs: Run's job is to invoke r10k and seal whatever it
 // produced, not to drive r10k's resolution.
-func writeFakeR10k(t *testing.T, staging string, envs []string, exitCode int) string {
+func writeFakeR10k(t *testing.T, basedir string, envs []string, exitCode int) string {
 	t.Helper()
 	script := "#!/bin/sh\n"
 	for _, env := range envs {
-		dir := filepath.Join(staging, env)
+		dir := filepath.Join(basedir, env)
 		script += fmt.Sprintf("mkdir -p %q\n", filepath.Join(dir, "manifests"))
 		script += fmt.Sprintf("printf 'node default { }\\n' > %q\n", filepath.Join(dir, "manifests", "site.pp"))
 		script += fmt.Sprintf("printf '{\"name\":%q,\"signature\":\"commit-%s\"}' > %q\n",
@@ -36,14 +36,14 @@ func writeFakeR10k(t *testing.T, staging string, envs []string, exitCode int) st
 }
 
 func TestRunDeploysAndSeals(t *testing.T) {
-	staging := t.TempDir()
-	r10k := writeFakeR10k(t, staging, []string{"production"}, 0)
+	basedir := t.TempDir()
+	r10k := writeFakeR10k(t, basedir, []string{"production"}, 0)
 
 	results, err := Run(Config{
-		R10kPath:   r10k,
-		StagingDir: staging,
-		StateDir:   t.TempDir(),
-		Modules:    true,
+		R10kPath: r10k,
+		BaseDir:  basedir,
+		StateDir: t.TempDir(),
+		Modules:  true,
 	}, []string{"production"}, false, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -61,7 +61,7 @@ func TestRunDeploysAndSeals(t *testing.T) {
 
 	// The reported code_id must equal an independent seal of the staged tree,
 	// or the deploy is reporting an id nothing can be served for.
-	want, err := seal.CodeID(filepath.Join(staging, "production"))
+	want, err := seal.CodeID(filepath.Join(basedir, "production"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,13 +71,13 @@ func TestRunDeploysAndSeals(t *testing.T) {
 }
 
 func TestRunAllListsStagedEnvironments(t *testing.T) {
-	staging := t.TempDir()
-	r10k := writeFakeR10k(t, staging, []string{"production", "testing"}, 0)
+	basedir := t.TempDir()
+	r10k := writeFakeR10k(t, basedir, []string{"production", "testing"}, 0)
 
 	results, err := Run(Config{
-		R10kPath:   r10k,
-		StagingDir: staging,
-		StateDir:   t.TempDir(),
+		R10kPath: r10k,
+		BaseDir:  basedir,
+		StateDir: t.TempDir(),
 	}, nil, true, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -92,22 +92,22 @@ func TestRunAllListsStagedEnvironments(t *testing.T) {
 }
 
 func TestRunSurfacesR10kFailure(t *testing.T) {
-	staging := t.TempDir()
-	r10k := writeFakeR10k(t, staging, []string{"production"}, 3)
+	basedir := t.TempDir()
+	r10k := writeFakeR10k(t, basedir, []string{"production"}, 3)
 
 	if _, err := Run(Config{
-		R10kPath:   r10k,
-		StagingDir: staging,
-		StateDir:   t.TempDir(),
+		R10kPath: r10k,
+		BaseDir:  basedir,
+		StateDir: t.TempDir(),
 	}, []string{"production"}, false, false); err == nil {
 		t.Fatal("expected an error when r10k exits non-zero")
 	}
 }
 
 func TestRunRejectsBadArgs(t *testing.T) {
-	staging := t.TempDir()
-	r10k := writeFakeR10k(t, staging, []string{"production"}, 0)
-	base := Config{R10kPath: r10k, StagingDir: staging, StateDir: t.TempDir()}
+	basedir := t.TempDir()
+	r10k := writeFakeR10k(t, basedir, []string{"production"}, 0)
+	base := Config{R10kPath: r10k, BaseDir: basedir, StateDir: t.TempDir()}
 
 	cases := map[string]struct {
 		cfg  Config
@@ -116,7 +116,7 @@ func TestRunRejectsBadArgs(t *testing.T) {
 	}{
 		"no environment and not --all": {base, nil, false},
 		"both environments and --all":  {base, []string{"production"}, true},
-		"no staging directory":         {Config{R10kPath: r10k}, []string{"production"}, false},
+		"no basedir directory":         {Config{R10kPath: r10k}, []string{"production"}, false},
 		"invalid environment name":     {base, []string{"Bad Env!"}, false},
 	}
 	for name, c := range cases {
@@ -152,8 +152,8 @@ func TestResolveR10kExplicitMissing(t *testing.T) {
 
 // writeSerializingR10k writes a fake r10k that fails if a second copy runs while
 // it is still working, by guarding a marker file. Two deploys that overlap on
-// staging both exec this; if the lock does its job, they never overlap.
-func writeSerializingR10k(t *testing.T, staging, markerDir string) string {
+// basedir both exec this; if the lock does its job, they never overlap.
+func writeSerializingR10k(t *testing.T, basedir, markerDir string) string {
 	t.Helper()
 	script := fmt.Sprintf(`#!/bin/sh
 marker=%q/deploying
@@ -166,9 +166,9 @@ sleep 0.4
 rm -f "$marker"
 `,
 		markerDir,
-		filepath.Join(staging, "production", "manifests"),
-		filepath.Join(staging, "production", "manifests", "site.pp"),
-		filepath.Join(staging, "production", ".r10k-deploy.json"))
+		filepath.Join(basedir, "production", "manifests"),
+		filepath.Join(basedir, "production", "manifests", "site.pp"),
+		filepath.Join(basedir, "production", ".r10k-deploy.json"))
 
 	path := filepath.Join(t.TempDir(), "r10k")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { // #nosec G306
@@ -177,19 +177,19 @@ rm -f "$marker"
 	return path
 }
 
-// TestConcurrentDeploysSerialize is the reason for the staging lock: two
-// deploys sharing a staging directory must not run r10k at the same time, or
+// TestConcurrentDeploysSerialize is the reason for the basedir lock: two
+// deploys sharing a basedir directory must not run r10k at the same time, or
 // they corrupt each other's trees. Both share one state directory, hence one
 // lock; the fake r10k fails if it ever sees an overlap.
 func TestConcurrentDeploysSerialize(t *testing.T) {
-	staging := t.TempDir()
+	basedir := t.TempDir()
 	state := t.TempDir()
 	marker := t.TempDir()
-	r10k := writeSerializingR10k(t, staging, marker)
+	r10k := writeSerializingR10k(t, basedir, marker)
 
 	cfg := Config{
 		R10kPath:    r10k,
-		StagingDir:  staging,
+		BaseDir:     basedir,
 		StateDir:    state,
 		LockTimeout: 30 * time.Second,
 	}

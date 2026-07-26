@@ -136,7 +136,7 @@ func TestPeersConcurrentObservations(t *testing.T) {
 // End to end through the handler: the request path is where certname, route and
 // recording actually meet, and a mistake there is invisible to the unit tests.
 func TestHandlerRecordsPeersFromRequests(t *testing.T) {
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 	peers := NewPeers()
@@ -201,7 +201,7 @@ func TestHandlerRecordsPeersFromRequests(t *testing.T) {
 // A refused peer must not appear in the fleet view: it is not part of the
 // estate, and listing it would suggest otherwise.
 func TestHandlerDoesNotRecordRefusedPeers(t *testing.T) {
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 	peers := NewPeers()
@@ -297,7 +297,7 @@ func TestParseServingBoundsInput(t *testing.T) {
 // The distinction the whole feature rests on: what a compiler says it serves,
 // separate from what the publisher watched it download.
 func TestHandlerRecordsSelfReportedServing(t *testing.T) {
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 	peers := NewPeers()

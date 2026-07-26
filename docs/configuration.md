@@ -2,11 +2,11 @@
 
 The operator commands read shared settings from a YAML file, so the paths and
 options that otherwise repeat across `publish`, `deploy`, and `deploy-server` —
-staging, state, ssldir, certname, r10k — are set once.
+basedir, state, ssldir, certname, r10k — are set once.
 
 ```yaml
 # /etc/codavox/config.yaml
-staging:  /etc/puppetlabs/code/environments
+basedir:  /etc/puppetlabs/code/environments
 state:    /opt/puppetlabs/codavox/state
 ssldir:   /etc/puppetlabs/puppet/ssl
 certname: puppet.example.com
@@ -65,7 +65,7 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 
 | key | commands | flag |
 |---|---|---|
-| `staging` | publish, deploy, deploy-server | `--staging` |
+| `basedir` | publish, deploy, deploy-server | `--basedir` |
 | `state` | publish, compilers, deploy, deploy-server, provenance | `--state` |
 | `ssldir` | publish, agent, compilers, deploy-server | `--ssldir` |
 | `certname` | publish, agent, compilers, deploy-server | `--certname` |

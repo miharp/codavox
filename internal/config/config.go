@@ -1,7 +1,7 @@
 // Package config loads codavox's shared configuration file.
 //
 // The file lets an operator set the paths and options that otherwise repeat
-// across publish, deploy, and deploy-server — staging, state, ssldir, certname,
+// across publish, deploy, and deploy-server — basedir, state, ssldir, certname,
 // r10k — in one place. Every value it holds is also a flag: a flag always wins,
 // the file fills unset flags, and a built-in default is the last resort.
 //
@@ -32,7 +32,7 @@ const PathEnvVar = "CODAVOX_CONFIG"
 // per-daemon settings sit in named sections, so the two servers' distinct listen
 // addresses do not collide.
 type Config struct {
-	Staging         string `yaml:"staging"`
+	BaseDir         string `yaml:"basedir"`
 	State           string `yaml:"state"`
 	SSLDir          string `yaml:"ssldir"`
 	Certname        string `yaml:"certname"`

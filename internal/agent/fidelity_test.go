@@ -13,12 +13,12 @@ import (
 )
 
 // publisher runs the real publish subcommand and can be restarted in place to
-// stand in for a fresh deploy: the publisher seals its staging directory at
-// startup, so pointing staging at new content and restarting is how a test
+// stand in for a fresh deploy: the publisher seals its basedir directory at
+// startup, so pointing basedir at new content and restarting is how a test
 // advances the served code_id.
 type publisher struct {
 	bin     string
-	staging string
+	basedir string
 	addr    string
 	ssldir  string
 	state   string
@@ -37,7 +37,7 @@ func (p *publisher) restart(t *testing.T) {
 		p.state = t.TempDir()
 	}
 	args := append([]string{"publish",
-		"--staging", p.staging,
+		"--basedir", p.basedir,
 		"--listen", p.addr,
 		"--certname", "puppet.example.com",
 		"--ssldir", p.ssldir,
@@ -112,7 +112,7 @@ func syncReady(t *testing.T, c compiler, bin, publisher string, extra ...string)
 }
 
 // TestSIGHUPTriggersReseal checks the post-deploy trigger. r10k deploys new
-// content into staging and signals the *running* publisher with SIGHUP — no
+// content into basedir and signals the *running* publisher with SIGHUP — no
 // restart — the way an r10k postrun hook would. The publisher must reseal and
 // begin advertising the new code_id, and a compiler must then converge onto it.
 func TestSIGHUPTriggersReseal(t *testing.T) {
@@ -122,14 +122,14 @@ func TestSIGHUPTriggersReseal(t *testing.T) {
 
 	bin := build(t)
 	ca := testca.New(t)
-	staging := t.TempDir()
+	basedir := t.TempDir()
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 
-	pub := &publisher{bin: bin, staging: staging, addr: "127.0.0.1:18157", ssldir: serverSSL, state: t.TempDir()}
+	pub := &publisher{bin: bin, basedir: basedir, addr: "127.0.0.1:18157", ssldir: serverSSL, state: t.TempDir()}
 	t.Cleanup(pub.stop)
 	c := newCompiler(t, ca, "compiler01.example.com")
 
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v1\n"})
 	pub.restart(t)
 	syncReady(t, c, bin, pub.url())
 	id1, err := c.codeID(t, bin, "production")
@@ -138,7 +138,7 @@ func TestSIGHUPTriggersReseal(t *testing.T) {
 	}
 
 	// New deploy into the same running publisher, then the postrun signal.
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v2\n"})
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v2\n"})
 	pub.hup(t)
 
 	// The reseal is asynchronous, so poll: converge and check whether the id
@@ -180,15 +180,15 @@ func TestContentFidelity(t *testing.T) {
 
 	bin := build(t)
 	ca := testca.New(t)
-	staging := t.TempDir()
+	basedir := t.TempDir()
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 
-	pub := &publisher{bin: bin, staging: staging, addr: "127.0.0.1:18154", ssldir: serverSSL}
+	pub := &publisher{bin: bin, basedir: basedir, addr: "127.0.0.1:18154", ssldir: serverSSL}
 	t.Cleanup(pub.stop)
 	c := newCompiler(t, ca, "compiler01.example.com")
 
 	// Deploy v1 and converge onto it.
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v1\n"})
 	pub.restart(t)
 	syncReady(t, c, bin, pub.url())
 	old, err := c.codeID(t, bin, "production")
@@ -198,7 +198,7 @@ func TestContentFidelity(t *testing.T) {
 
 	// Deploy v2 and converge onto it. The old version is now superseded but,
 	// being recent, is still retained on disk.
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v2\n"})
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v2\n"})
 	pub.restart(t)
 	syncReady(t, c, bin, pub.url())
 	current, err := c.codeID(t, bin, "production")
@@ -257,7 +257,7 @@ func TestReapingRetainsInFlightVersions(t *testing.T) {
 	// ordering is stable.
 	deploy := func(t *testing.T, pub *publisher, c compiler, body string, extra ...string) string {
 		t.Helper()
-		writeEnv(t, pub.staging, "production", map[string]string{"manifests/site.pp": body})
+		writeEnv(t, pub.basedir, "production", map[string]string{"manifests/site.pp": body})
 		pub.restart(t)
 		syncReady(t, c, bin, pub.url(), extra...)
 		id, err := c.codeID(t, bin, "production")
@@ -272,8 +272,8 @@ func TestReapingRetainsInFlightVersions(t *testing.T) {
 	// too young to reap, so --keep 1 must not shrink the retained set below the
 	// versions an in-flight run might still hold.
 	t.Run("young versions survive keep pressure", func(t *testing.T) {
-		staging := t.TempDir()
-		pub := &publisher{bin: bin, staging: staging, addr: "127.0.0.1:18155", ssldir: serverSSL}
+		basedir := t.TempDir()
+		pub := &publisher{bin: bin, basedir: basedir, addr: "127.0.0.1:18155", ssldir: serverSSL}
 		t.Cleanup(pub.stop)
 		c := newCompiler(t, ca, "compiler01.example.com")
 
@@ -290,8 +290,8 @@ func TestReapingRetainsInFlightVersions(t *testing.T) {
 	// version plus --keep superseded ones and drops the rest, so retention stays
 	// bounded and the oldest tree is genuinely gone.
 	t.Run("old versions past keep are reaped", func(t *testing.T) {
-		staging := t.TempDir()
-		pub := &publisher{bin: bin, staging: staging, addr: "127.0.0.1:18156", ssldir: serverSSL}
+		basedir := t.TempDir()
+		pub := &publisher{bin: bin, basedir: basedir, addr: "127.0.0.1:18156", ssldir: serverSSL}
 		t.Cleanup(pub.stop)
 		c := newCompiler(t, ca, "compiler01.example.com")
 

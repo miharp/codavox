@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// removeEnv deletes an environment from staging and reseals, the way deleting a
+// removeEnv deletes an environment from basedir and reseals, the way deleting a
 // control-repo branch and redeploying would drop it from the publisher.
 func (f *fixture) removeEnv(t *testing.T, env string) {
 	t.Helper()
-	if err := os.RemoveAll(filepath.Join(f.staging, env)); err != nil {
+	if err := os.RemoveAll(filepath.Join(f.basedir, env)); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.store.Reseal(); err != nil {
@@ -88,7 +88,7 @@ func TestPruneSkipsEmptyAdvertisement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Staging emptied: the publisher now advertises nothing.
+	// BaseDir emptied: the publisher now advertises nothing.
 	f.removeEnv(t, "production")
 	if len(f.store.Environments()) != 0 {
 		t.Fatal("setup: publisher still advertises environments")

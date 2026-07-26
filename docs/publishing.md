@@ -4,7 +4,7 @@ The publisher seals staged environments and serves them to compilers over
 mutual TLS.
 
 ```console
-codavox publish --staging /etc/puppetlabs/code/environments
+codavox publish --basedir /etc/puppetlabs/code/environments
 ```
 
 ```text
@@ -16,7 +16,7 @@ listening on :8150 as puppet.example.com (roles: openvox_compiler, certnames: no
 
 | flag | default | purpose |
 |---|---|---|
-| `--staging` | *required* | Directory holding one subdirectory per environment |
+| `--basedir` | *required* | Directory holding one subdirectory per environment |
 | `--listen` | `:8150` | Address to serve on |
 | `--certname` | system hostname | Node's Puppet certname |
 | `--ssldir` | `/etc/puppetlabs/puppet/ssl` | Puppet SSL directory |
@@ -28,21 +28,26 @@ listening on :8150 as puppet.example.com (roles: openvox_compiler, certnames: no
 Not owning the deploy keeps the trust boundary small and lets existing r10k
 workflows continue untouched.
 
-### Pointing `--staging` at the right directory
+### Pointing `--basedir` at the right directory
 
-`--staging` is **r10k's `basedir`** — the directory holding one subdirectory per
+`--basedir` is **r10k's `basedir`** — the directory holding one subdirectory per
 environment, not its parent:
 
 ```yaml
 # r10k.yaml
 sources:
   puppet:
-    basedir: /etc/puppetlabs/code/environments   # <- this is --staging
+    basedir: /etc/puppetlabs/code/environments   # <- this is --basedir
 ```
 
 On a stock OpenVox install that is `/etc/puppetlabs/code/environments`, the
-codedir r10k has always deployed into. codavox needs no separate staging area
-and no change to how you deploy today.
+codedir r10k has always deployed into. **codavox adds no code directory to the
+primary and writes nothing here** — it reads this tree and nothing else. No
+change to how you deploy today.
+
+That is why the setting is `basedir` rather than something like `staging`: there
+is no staging step. A name borrowed from PE would suggest codavox writes a copy
+somewhere, and it does not.
 
 If you are coming from PE, the equivalent is
 `/etc/puppetlabs/code-staging/environments` — PE's Code Manager `environmentdir`
@@ -188,7 +193,7 @@ would pin a compiler to a stale version and defeat convergence.
 Returns the deterministic gzipped tar for that version.
 
 The artifact is **materialized at seal time**, written to `<state>/artifacts`
-and served from there — never tarred from the staging directory on demand. This
+and served from there — never tarred from the basedir on demand. This
 is what makes serving safe while r10k is mid-deploy: the bytes a compiler
 downloads are the snapshot taken when the tree was quiescent, so an overwrite in
 progress can never be streamed as a half-written archive whose bytes no longer
@@ -280,7 +285,7 @@ postrun: ['/bin/sh', '-c', 'systemctl reload codavox-publish']
 
 or send the signal directly (`systemctl reload codavox-publish`, or
 `kill -HUP <pid>`). Because the signal fires only after r10k has returned, the
-staging tree is quiescent when the reseal runs, so no reseal ever observes a
+basedir tree is quiescent when the reseal runs, so no reseal ever observes a
 half-written deploy. This is deliberately an *explicit post-deploy trigger*
 rather than a filesystem watch: codavox does not own the deploy, and a watch
 would have to reconstruct the "deploy finished" signal that `postrun` already
@@ -291,7 +296,7 @@ across a process boundary because codavox observes rather than runs r10k.
 downloads.
 
 A directory whose name OpenVox Server would reject is skipped rather than
-treated as fatal — one badly named directory in the staging area should not
+treated as fatal — one badly named directory in the basedir should not
 stop every other environment from being published.
 
 ## Provenance
@@ -302,7 +307,7 @@ artifact deliberately excludes `.git` and `.r10k-deploy.json`, so a compiler
 carries no way back to a commit.
 
 The publisher closes that gap. When it seals an environment it reads r10k's
-`.r10k-deploy.json` from the staging tree — which is still on disk, only
+`.r10k-deploy.json` from the basedir tree — which is still on disk, only
 *excluded from sealing* — and appends a record to a local log:
 
 ```text

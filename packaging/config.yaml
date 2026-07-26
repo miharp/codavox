@@ -7,9 +7,9 @@
 # installing the package is not a configuration change. Uncomment what this
 # node needs, based on which units you enable:
 #
-#   codavox-publish.service        needs staging
+#   codavox-publish.service        needs basedir
 #   codavox-agent.service          needs agent.publisher
-#   codavox-deploy-server.service  needs staging, and api_token and/or secret
+#   codavox-deploy-server.service  needs basedir, and api_token and/or secret
 #
 # Every setting here is also a command-line flag. A flag overrides this file,
 # and this file overrides the built-in default shown as the value.
@@ -25,7 +25,7 @@
 
 # r10k's basedir, the tree the publisher seals. Required by publish and
 # deploy-server; no default.
-# staging: /etc/puppetlabs/code/environments
+# basedir: /etc/puppetlabs/code/environments
 
 # Where the publisher keeps its artifacts, pidfile, and provenance log.
 # state: /opt/puppetlabs/codavox/state

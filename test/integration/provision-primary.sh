@@ -7,7 +7,7 @@
 set -euo pipefail
 export PATH="/opt/puppetlabs/bin:$PATH"
 
-STAGING=/etc/puppetlabs/code-staging
+BASEDIR=/etc/puppetlabs/code/environments
 API_TOKEN="${API_TOKEN:-integration-token}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-integration-secret}"
 
@@ -49,9 +49,9 @@ if [ ! -e "${SSLDIR}/crl.pem" ]; then
   fi
 fi
 
-echo "[primary] seeding ${STAGING}/production"
-mkdir -p "${STAGING}/production/manifests"
-cat > "${STAGING}/production/manifests/site.pp" <<'PP'
+echo "[primary] seeding ${BASEDIR}/production"
+mkdir -p "${BASEDIR}/production/manifests"
+cat > "${BASEDIR}/production/manifests/site.pp" <<'PP'
 node default {
   notify { 'codavox: served through a static catalog': }
   file { '/tmp/codavox-managed':
@@ -60,7 +60,7 @@ node default {
   }
 }
 PP
-cat > "${STAGING}/production/environment.conf" <<'CONF'
+cat > "${BASEDIR}/production/environment.conf" <<'CONF'
 # Minimal environment seeded by the codavox integration harness.
 CONF
 
@@ -70,7 +70,7 @@ printf '%s' "$API_TOKEN"      > /etc/codavox/api.token
 printf '%s' "$WEBHOOK_SECRET" > /etc/codavox/webhook.secret
 # api_token and secret are file paths, matching the --api-token/--secret flags.
 cat > /etc/codavox/config.yaml <<CFG
-staging: ${STAGING}
+basedir: ${BASEDIR}
 ssldir: /etc/puppetlabs/puppet/ssl
 certname: primary
 

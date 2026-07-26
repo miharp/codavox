@@ -40,8 +40,8 @@ func TestPublishBinaryEndToEnd(t *testing.T) {
 	ca := testca.New(t)
 	ssldir := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 
-	staging := t.TempDir()
-	manifests := filepath.Join(staging, "production", "manifests")
+	basedir := t.TempDir()
+	manifests := filepath.Join(basedir, "production", "manifests")
 	if err := os.MkdirAll(manifests, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestPublishBinaryEndToEnd(t *testing.T) {
 
 	const addr = "127.0.0.1:18151"
 	cmd := exec.Command(bin, "publish",
-		"--staging", staging,
+		"--basedir", basedir,
 		"--listen", addr,
 		"--certname", "puppet.example.com",
 		"--ssldir", ssldir,

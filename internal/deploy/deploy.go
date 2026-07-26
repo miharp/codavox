@@ -35,7 +35,7 @@ import (
 const DefaultWaitTimeout = 60 * time.Second
 
 // DefaultLockTimeout bounds how long Run waits for a concurrent deploy to
-// release the staging lock. It is generous because r10k, which a competing
+// release the basedir lock. It is generous because r10k, which a competing
 // deploy runs while holding the lock, can itself take minutes.
 const DefaultLockTimeout = 10 * time.Minute
 
@@ -49,9 +49,9 @@ type Config struct {
 	R10kPath string
 	// R10kConfig is an optional r10k.yaml passed to r10k with --config.
 	R10kConfig string
-	// StagingDir is r10k's basedir and what the publisher seals. Required, and
-	// it must match the publisher's --staging.
-	StagingDir string
+	// BaseDir is r10k's basedir and what the publisher seals. Required, and
+	// it must match the publisher's --basedir.
+	BaseDir string
 	// StateDir locates the publisher's pidfile and materialized artifacts. It
 	// must match the publisher's --state.
 	StateDir string
@@ -59,7 +59,7 @@ type Config struct {
 	Modules bool
 	// WaitTimeout bounds the Wait poll; zero uses DefaultWaitTimeout.
 	WaitTimeout time.Duration
-	// LockTimeout bounds how long Run waits to acquire the staging lock behind
+	// LockTimeout bounds how long Run waits to acquire the basedir lock behind
 	// another deploy; zero uses DefaultLockTimeout.
 	LockTimeout time.Duration
 	// Stderr receives r10k's output; nil means os.Stderr.
@@ -84,8 +84,8 @@ type Result struct {
 // returned error is non-nil if the deploy did not fully succeed; the results
 // are still returned so a caller can report per-environment status.
 func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
-	if cfg.StagingDir == "" {
-		return nil, errors.New("deploy needs a staging directory")
+	if cfg.BaseDir == "" {
+		return nil, errors.New("deploy needs a basedir directory")
 	}
 	if cfg.StateDir == "" {
 		return nil, errors.New("deploy needs a state directory")
@@ -108,7 +108,7 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	}
 
 	// Serialize against every other deploy on this host. r10k mutates the
-	// staging directory in place, so two overlapping deploys — from the CLI, the
+	// basedir directory in place, so two overlapping deploys — from the CLI, the
 	// webhook, or the deploy API — would corrupt each other's trees. The lock is
 	// held across r10k and sealing, and through --wait, so a second deploy does
 	// not begin r10k until this one's reseal has been observed.
@@ -116,7 +116,7 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	if lockTimeout <= 0 {
 		lockTimeout = DefaultLockTimeout
 	}
-	release, err := lockStaging(cfg.StateDir, lockTimeout)
+	release, err := lockDeploy(cfg.StateDir, lockTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	// For --all, report whatever is now staged; r10k does not tell us the set.
 	deployed := envs
 	if all {
-		deployed, err = stagedEnvironments(cfg.StagingDir)
+		deployed, err = stagedEnvironments(cfg.BaseDir)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +138,7 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	results := make([]Result, 0, len(deployed))
 	for _, env := range deployed {
 		r := Result{Env: env}
-		id, commit, err := sealEnv(cfg.StagingDir, env)
+		id, commit, err := sealEnv(cfg.BaseDir, env)
 		if err != nil {
 			r.Err = err.Error()
 			results = append(results, r)
@@ -173,7 +173,7 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 			}
 		}
 	} else if signalErr != nil {
-		_, _ = fmt.Fprintf(stderr(cfg), "codavox: %v; staging is updated but nothing is serving it yet\n", signalErr)
+		_, _ = fmt.Fprintf(stderr(cfg), "codavox: %v; basedir is updated but nothing is serving it yet\n", signalErr)
 	}
 
 	return results, summarize(results)
@@ -225,11 +225,11 @@ func runR10k(cfg Config, r10k string, envs []string) error {
 	return nil
 }
 
-// stagedEnvironments lists the valid environment directories in stagingDir.
-func stagedEnvironments(stagingDir string) ([]string, error) {
-	entries, err := os.ReadDir(stagingDir)
+// stagedEnvironments lists the valid environment directories in baseDir.
+func stagedEnvironments(baseDir string) ([]string, error) {
+	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("reading staging directory: %w", err)
+		return nil, fmt.Errorf("reading basedir directory: %w", err)
 	}
 	var envs []string
 	for _, e := range entries {
@@ -242,8 +242,8 @@ func stagedEnvironments(stagingDir string) ([]string, error) {
 
 // sealEnv computes the code_id for a staged environment and reads the commit
 // r10k recorded for it.
-func sealEnv(stagingDir, env string) (codeID, commit string, err error) {
-	envDir := filepath.Join(stagingDir, env)
+func sealEnv(baseDir, env string) (codeID, commit string, err error) {
+	envDir := filepath.Join(baseDir, env)
 	if _, err := os.Stat(envDir); err != nil {
 		return "", "", fmt.Errorf("environment %s was not staged: %w", env, err)
 	}
@@ -269,13 +269,13 @@ func deployCommit(envDir string) string {
 	return d.Signature
 }
 
-// lockStaging takes an exclusive flock on the deploy lock under stateDir,
+// lockDeploy takes an exclusive flock on the deploy lock under stateDir,
 // returning a release function. It polls rather than blocking in the syscall so
 // it can give up after timeout instead of hanging on a wedged deploy.
 //
 // flock is advisory and process-associated, released if the holder exits, so a
 // crashed deploy does not leave the lock stuck.
-func lockStaging(stateDir string, timeout time.Duration) (func(), error) {
+func lockDeploy(stateDir string, timeout time.Duration) (func(), error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating state directory: %w", err)
 	}
@@ -296,7 +296,7 @@ func lockStaging(stateDir string, timeout time.Duration) (func(), error) {
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			_ = f.Close()
-			return nil, fmt.Errorf("locking staging: %w", err)
+			return nil, fmt.Errorf("locking basedir: %w", err)
 		}
 		if time.Now().After(deadline) {
 			_ = f.Close()

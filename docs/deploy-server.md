@@ -10,7 +10,7 @@ deploy is triggered, it runs through the same path
 codavox deploy-server \
   --api-token /etc/codavox/api.token \
   --secret /etc/codavox/webhook.secret \
-  --staging /etc/puppetlabs/code/environments
+  --basedir /etc/puppetlabs/code/environments
 ```
 
 Enable whichever front doors you need: `--api-token` turns on the API,
@@ -26,7 +26,7 @@ is an alias that runs this command with only the webhook.
 | `--listen` | `:8170` | Address to serve on |
 | `--no-tls` | | Serve plain HTTP, for a setup that terminates TLS at a proxy |
 | `--history` | `100` | Deploy records to retain in memory |
-| `--staging` | *required* | r10k's basedir, the same the publisher serves |
+| `--basedir` | *required* | r10k's basedir, the same the publisher serves |
 | `--state` | `<root>/state` | Publisher state directory (to signal the reseal) |
 | `--r10k` | `r10k` on `PATH`, then `/opt/puppetlabs/puppet/bin/r10k` | r10k binary |
 | `--r10k-config` | r10k's default | r10k.yaml passed with `--config` |
@@ -106,7 +106,7 @@ it in a header, which is why TLS is on by default.
 
 ## Serialized deploys
 
-The server runs one deploy at a time, and `internal/deploy` also takes a staging
+The server runs one deploy at a time, and `internal/deploy` also takes a deploy
 lock (see [deploying.md](deploying.md#concurrent-deploys)), so an API deploy, a
 webhook deploy, and a `codavox deploy` on the command line never run r10k over
 each other.

@@ -21,7 +21,7 @@ import (
 	"github.com/miharp/codavox/internal/testca"
 )
 
-func staging(t *testing.T, envs map[string]map[string]string) *Store {
+func basedir(t *testing.T, envs map[string]map[string]string) *Store {
 	t.Helper()
 	dir := t.TempDir()
 	for env, files := range envs {
@@ -140,7 +140,7 @@ func TestResealKeepsTheLastGoodVersionOnFailure(t *testing.T) {
 }
 
 func TestReseal(t *testing.T) {
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 		"testing":    {"manifests/site.pp": "node default { }\n"},
 	})
@@ -167,7 +167,7 @@ func TestReseal(t *testing.T) {
 
 	t.Run("changed content produces a new id", func(t *testing.T) {
 		before := s.Environments()["production"]
-		path := filepath.Join(s.StagingDir, "production/manifests/site.pp")
+		path := filepath.Join(s.BaseDir, "production/manifests/site.pp")
 		if err := os.WriteFile(path, []byte("node default { notify { 'x': } }\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +181,7 @@ func TestReseal(t *testing.T) {
 
 	// One malformed directory must not take the whole publisher down.
 	t.Run("invalid environment names are skipped", func(t *testing.T) {
-		if err := os.MkdirAll(filepath.Join(s.StagingDir, "bad-name"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(s.BaseDir, "bad-name"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Reseal(); err != nil {
@@ -201,7 +201,7 @@ func TestReseal(t *testing.T) {
 }
 
 func TestHandlerEnvironments(t *testing.T) {
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 	srv := httptest.NewServer(Handler(s, nil, nil))
@@ -232,7 +232,7 @@ func TestHandlerEnvironments(t *testing.T) {
 }
 
 func TestHandlerArtifact(t *testing.T) {
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {
 			"manifests/site.pp":      "node default { }\n",
 			"modules/apache/init.pp": "class apache { }\n",
@@ -314,7 +314,7 @@ func TestHandlerArtifact(t *testing.T) {
 	})
 }
 
-func writeStagingFile(t *testing.T, root, rel, body string) {
+func writeEnvFile(t *testing.T, root, rel, body string) {
 	t.Helper()
 	full := filepath.Join(root, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -325,14 +325,14 @@ func writeStagingFile(t *testing.T, root, rel, body string) {
 	}
 }
 
-// TestArtifactIsSnapshotNotLiveStaging is the reason artifacts are materialized
-// at seal time. After sealing, the staging directory is mutated the way an
+// TestArtifactIsSnapshotNotLiveTree is the reason artifacts are materialized
+// at seal time. After sealing, the basedir directory is mutated the way an
 // r10k deploy in progress would mutate it, without a reseal. The served
 // artifact must remain the snapshot sealed earlier — same code_id, same bytes —
-// not whatever staging now holds. Serving live staging would stream a
+// not whatever basedir now holds. Serving live basedir would stream a
 // half-written tree whose bytes no longer match the advertised code_id.
-func TestArtifactIsSnapshotNotLiveStaging(t *testing.T) {
-	s := staging(t, map[string]map[string]string{
+func TestArtifactIsSnapshotNotLiveTree(t *testing.T) {
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "v1\n"},
 	})
 	srv := httptest.NewServer(Handler(s, nil, nil))
@@ -340,8 +340,8 @@ func TestArtifactIsSnapshotNotLiveStaging(t *testing.T) {
 
 	current := s.Environments()["production"]
 
-	// A deploy starts overwriting staging in place; no reseal has happened yet.
-	writeStagingFile(t, s.StagingDir, "production/manifests/site.pp", "v2-partial\n")
+	// A deploy starts overwriting basedir in place; no reseal has happened yet.
+	writeEnvFile(t, s.BaseDir, "production/manifests/site.pp", "v2-partial\n")
 
 	resp, err := http.Get(srv.URL + ArtifactPath("production", current))
 	if err != nil {
@@ -365,7 +365,7 @@ func TestArtifactIsSnapshotNotLiveStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got != current {
-		t.Errorf("artifact sealed to %s, want %s — served live staging, not the snapshot", got, current)
+		t.Errorf("artifact sealed to %s, want %s — served live basedir, not the snapshot", got, current)
 	}
 	served, err := os.ReadFile(filepath.Join(dst, "manifests", "site.pp"))
 	if err != nil {
@@ -379,7 +379,7 @@ func TestArtifactIsSnapshotNotLiveStaging(t *testing.T) {
 func TestResealReapsSupersededArtifact(t *testing.T) {
 	dir := t.TempDir()
 	artifacts := t.TempDir()
-	writeStagingFile(t, dir, "production/manifests/site.pp", "v1\n")
+	writeEnvFile(t, dir, "production/manifests/site.pp", "v1\n")
 
 	s := NewStore(dir, artifacts)
 	if err := s.Reseal(); err != nil {
@@ -393,7 +393,7 @@ func TestResealReapsSupersededArtifact(t *testing.T) {
 
 	// New content seals to a new code_id; the superseded artifact is dead weight
 	// and must be reaped, while the new one takes its place.
-	writeStagingFile(t, dir, "production/manifests/site.pp", "v2\n")
+	writeEnvFile(t, dir, "production/manifests/site.pp", "v2\n")
 	if err := s.Reseal(); err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestRevocationAppliesToAnOpenConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 
@@ -501,7 +501,7 @@ func TestMutualTLSEnforcesRole(t *testing.T) {
 	compiler := ca.TLSCert(t, "compiler01.example.com", "openvox_compiler")
 	agent := ca.TLSCert(t, "webserver01.example.com", "webserver")
 
-	s := staging(t, map[string]map[string]string{
+	s := basedir(t, map[string]map[string]string{
 		"production": {"manifests/site.pp": "node default { }\n"},
 	})
 
