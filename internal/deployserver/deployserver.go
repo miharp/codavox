@@ -139,7 +139,7 @@ func New(cfg Config) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
 // Start runs the deploy worker until ctx is cancelled. Deploys run one at a
-// time; internal/deploy's staging lock also serializes against any other
+// time; internal/deploy's basedir lock also serializes against any other
 // process, so this worker being single is belt-and-suspenders for that host.
 func (s *Server) Start(ctx context.Context) {
 	for {

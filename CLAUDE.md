@@ -76,7 +76,7 @@ Package map (`internal/`):
 | `treegen` | Test-only; builds deterministic control-repo-shaped trees for benchmarks and the acceptance harness. |
 | `testca` | Test-only; issues certs with the `pp_role` extension and signs CRLs. Nothing shipped imports it. |
 
-Data flow: `publish` (primary) seals an r10k staging dir and serves it → `agent`
+Data flow: `publish` (primary) seals an r10k basedir and serves it → `agent`
 (compiler) polls, fetches the artifact, unpacks to `versions/<env>_<code_id>/`,
 and atomically swaps the `environments/<env>` symlink → `code-id` reads that
 symlink, `code-content` serves files from the version dir.
@@ -108,7 +108,7 @@ argument, and each is defended by a test or a doc.
   deploy and breaks content addressing.
 - **Distribute resolved trees, never Puppetfiles.** r10k is not deterministic
   across time, so per-compiler resolution can never converge. codavox does not
-  own the deploy; it observes an r10k staging dir.
+  own the deploy; it observes an r10k basedir.
 - **Revocation is enforced per request, not per handshake.** A revoked
   certificate stays cryptographically valid, so mutual TLS alone would keep
   admitting a revoked compiler forever. The publisher checks `$ssldir/crl.pem` —

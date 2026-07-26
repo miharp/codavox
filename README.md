@@ -109,7 +109,7 @@ flowchart LR
 
 1. You run `codavox deploy production` — or push to your control repo, or call
    the deploy API.
-2. codavox runs **r10k** once to resolve the code into a staging directory,
+2. codavox runs **r10k** once to resolve the code into a basedir,
    exactly as you do today. codavox does not replace r10k; it distributes what
    r10k produces.
 3. It content-hashes that resolved tree into a `code_id` and packages it as an
@@ -169,10 +169,10 @@ from `puppet-code`:
 
 ```console
 # publisher (run as a service), pointed at r10k's basedir
-$ codavox publish --staging /etc/puppetlabs/code/environments
+$ codavox publish --basedir /etc/puppetlabs/code/environments
 
 # deploy: runs r10k, packages the result, and serves it — waiting until it is live
-$ codavox deploy production --wait --staging /etc/puppetlabs/code/environments
+$ codavox deploy production --wait --basedir /etc/puppetlabs/code/environments
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
 ```
 
@@ -197,7 +197,7 @@ canary one compiler first.
 For push-to-deploy and CI, run `codavox deploy-server` on the primary: a push
 webhook and a token-authenticated deploy API with status and history, the way
 Code Manager's webhook and API work. Settings shared across these commands —
-staging directory, SSL paths, r10k — go in one [config file](docs/configuration.md).
+basedir, SSL paths, r10k — go in one [config file](docs/configuration.md).
 
 ## What it guarantees
 

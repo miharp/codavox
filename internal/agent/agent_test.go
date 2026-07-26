@@ -36,7 +36,7 @@ func fakePeerState(t *testing.T, cn string) *tls.ConnectionState {
 
 // fixture wires a publisher and a compiler-side agent against temp directories.
 type fixture struct {
-	staging string
+	basedir string
 	store   *publish.Store
 	server  *httptest.Server
 	agent   *Agent
@@ -46,8 +46,8 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 
-	staging := t.TempDir()
-	store := publish.NewStore(staging, t.TempDir())
+	basedir := t.TempDir()
+	store := publish.NewStore(basedir, t.TempDir())
 	server := httptest.NewServer(publish.Handler(store, nil, nil))
 	t.Cleanup(server.Close)
 
@@ -70,13 +70,13 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 
-	return &fixture{staging: staging, store: store, server: server, agent: a, layout: l}
+	return &fixture{basedir: basedir, store: store, server: server, agent: a, layout: l}
 }
 
-// publishEnv writes an environment into staging and reseals.
+// publishEnv writes an environment into basedir and reseals.
 func (f *fixture) publishEnv(t *testing.T, env string, files map[string]string) string {
 	t.Helper()
-	dir := filepath.Join(f.staging, env)
+	dir := filepath.Join(f.basedir, env)
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}

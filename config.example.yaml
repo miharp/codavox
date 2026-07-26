@@ -7,7 +7,7 @@
 # compile and stay a single symlink read.
 
 # Shared paths, used by publish, deploy, and deploy-server.
-staging:  /etc/puppetlabs/code-staging
+basedir:  /etc/puppetlabs/code/environments
 state:    /opt/puppetlabs/codavox/state
 ssldir:   /etc/puppetlabs/puppet/ssl
 certname: puppet.example.com

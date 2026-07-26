@@ -5,7 +5,7 @@
 primary. It is the familiar `puppet-code deploy` verb, for OpenVox Server.
 
 ```console
-$ codavox deploy production --staging /etc/puppetlabs/code/environments
+$ codavox deploy production --basedir /etc/puppetlabs/code/environments
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)
 ```
 
@@ -15,7 +15,7 @@ Run it on the primary, next to the publisher.
 
 1. Runs r10k: `r10k deploy environment <environment>… --puppetfile`, which
    resolves the control-repo branches and their Puppetfile modules into the
-   staging directory. r10k is synchronous, so `deploy` always waits for it.
+   basedir. r10k is synchronous, so `deploy` always waits for it.
 2. Seals each staged tree to report its `code_id` and reads the control-repo
    commit r10k resolved.
 3. Signals the running publisher with `SIGHUP` so it reseals and begins serving
@@ -36,12 +36,12 @@ Code Manager runs r10k once and distributes the result.
 | `--no-modules` | | Skip Puppetfile module resolution (`r10k` without `--puppetfile`) |
 | `--r10k` | `r10k` on `PATH`, then `/opt/puppetlabs/puppet/bin/r10k` | r10k binary |
 | `--r10k-config` | r10k's default | r10k.yaml passed with `--config` |
-| `--staging` | *required* | r10k's basedir, the same directory the publisher serves |
+| `--basedir` | *required* | r10k's basedir, the same directory the publisher serves |
 | `--state` | `<root>/state` | Publisher state directory (pidfile and artifacts) |
 | `--json` | | Emit results as a JSON array |
 
-`--staging` and `--state` must match the publisher's own flags. r10k's basedir,
-`publish --staging`, and `deploy --staging` are the same directory.
+`--basedir` and `--state` must match the publisher's own flags. r10k's basedir,
+`publish --basedir`, and `deploy --basedir` are the same directory.
 
 ## `--wait`
 
@@ -52,7 +52,7 @@ With `--wait`, it blocks until the publisher has materialized the artifact for
 each new `code_id`, then reports `serving`:
 
 ```console
-$ codavox deploy production --wait --staging /etc/puppetlabs/code/environments
+$ codavox deploy production --wait --basedir /etc/puppetlabs/code/environments
 production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
 ```
 
@@ -78,7 +78,7 @@ state.
 ## Concurrent deploys
 
 Every deploy — from the command, the webhook, or a script — takes an exclusive
-lock (`<state>/deploy.lock`) around r10k, because r10k rewrites the staging
+lock (`<state>/deploy.lock`) around r10k, because r10k rewrites the
 directory in place and two overlapping runs would corrupt each other's trees. A
 second deploy waits for the first to finish rather than racing it. The lock is
 advisory and released if the holder exits, so a crashed deploy does not wedge
@@ -87,7 +87,7 @@ it.
 ## Deleting environments
 
 When a branch is removed from the control repo, its environment is deleted by
-letting r10k purge it from staging and letting each compiler's agent prune it.
+letting r10k purge it from the basedir and letting each compiler's agent prune it.
 
 Configure r10k to purge removed environments — codavox does not do this, because
 `deploy` only observes r10k's output:
@@ -99,7 +99,7 @@ deploy:
 ```
 
 With that set, deleting a branch and redeploying removes the environment
-directory from staging, so `publish` stops advertising it. Each compiler running
+directory from the basedir, so `publish` stops advertising it. Each compiler running
 the agent with [`--prune-environments`](agent.md#pruning-deleted-environments)
 then removes it. Both halves are opt-in — codavox never deletes an operator's
 code by default.

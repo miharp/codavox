@@ -28,22 +28,61 @@ Three things must already be true. None of them are codavox's to provide:
    a private key, the CA certificate, and a CRL under `$ssldir`. codavox issues
    no certificates and runs no CA — it reuses what is already there.
 3. **You know which node runs the publisher.** It is normally the primary,
-   because that is where r10k runs and the publisher must read the staging
-   directory locally.
+   because that is where r10k runs and the publisher must read the
+   basedir locally.
 
-### The staging directory
+### The three code directories
 
-`--staging` is r10k's `basedir` — the directory holding environments, not its
-parent:
+codavox touches code directories differently on each side, and the primary is the
+one that surprises people: **codavox adds nothing there.**
 
-| your setup | `--staging` |
+On the **primary**, it reads the tree r10k already writes and writes only its own
+artifacts:
+
+```text
+/etc/puppetlabs/code/environments/       r10k writes it; codavox only READS it
+  production/  testing/                  <- this directory is `basedir`
+/opt/puppetlabs/codavox/state/
+  artifacts/                             sealed .tar.gz, one per current version
+  provenance.jsonl
+```
+
+On each **compiler**, it owns two directories and leaves the stock codedir alone:
+
+```text
+/opt/puppetlabs/codavox/versions/
+  production_3224ddbe…/                  unpacked tree, one per code_id
+  production_7b05ff28…/                  the previous one, kept for in-flight runs
+/opt/puppetlabs/codavox/environments/    OpenVox Server's environmentpath points here
+  production -> ../versions/production_3224ddbe…/    the atomic swap
+/etc/puppetlabs/code/environments/       untouched; the stock skeleton stays
+```
+
+A compiler's codedir is separate because a fresh OpenVox Server ships a populated
+`production/` in the stock path, and `rename(2)` cannot replace a real directory
+with a symlink. PE hits the same wall and solves it the same way, moving `codedir`
+to `/etc/puppetlabs/puppetserver/code` when versioned deploys are on.
+
+### Setting `basedir`
+
+`basedir` is r10k's `basedir` — the directory holding environments, not its
+parent. Take the value from `r10k.yaml`:
+
+```yaml
+# r10k.yaml
+sources:
+  puppet:
+    basedir: /etc/puppetlabs/code/environments   # <- this is codavox's basedir
+```
+
+| your setup | `basedir` |
 |---|---|
 | Stock OpenVox with r10k | `/etc/puppetlabs/code/environments` |
 | PE-shaped layout | `/etc/puppetlabs/code-staging/environments` |
 
-Take it from `r10k.yaml` rather than from any of the paths above; whatever
-`basedir` says is the answer. A path one level too high produces a publisher
-that starts cleanly and advertises nothing.
+**There is no staging step**, which is why the setting is not called `staging`:
+codavox writes nothing to this directory and keeps no copy of it. A path one
+level too high produces a publisher that starts cleanly and advertises nothing.
 
 ## Topology and ports
 
@@ -60,7 +99,7 @@ an inbound rule.
   │  codavox deploy-server    │            │    │                         │
   │        │                  │            │    v                         │
   │        v                  │            │  versions/<env>_<code_id>/   │
-  │  r10k ──> staging dir     │            │    ^                         │
+  │  r10k ──> basedir     │            │    ^                         │
   │             │             │            │    │ atomic symlink swap     │
   │             v      :8150  │            │  environments/<env>          │
   │       codavox publish  <──┼────────────┼────┘   ^                     │
@@ -206,7 +245,7 @@ compile — see [Rollout](#rollout).
 
 ### Publisher redundancy
 
-There is one publisher. Running two is possible — they seal the same staging
+There is one publisher. Running two is possible — they seal the same basedir
 directory to the same `code_id`, because sealing is reproducible — but codavox
 does not coordinate them, and pointing agents at one address means you need a
 load balancer or DNS to fail over.
@@ -327,7 +366,7 @@ Almost nothing here is precious, by design:
 |---|---|
 | Compiler version directories | Re-downloaded on the next poll. |
 | Environment symlinks | Recreated by the agent. Catalogs fail until it converges. |
-| Publisher artifacts | Regenerated from the staging directory at the next seal. |
+| Publisher artifacts | Regenerated from the basedir at the next seal. |
 | Fleet view | In memory; refills within one poll interval. |
 | **Provenance log** | **Not recoverable.** |
 
@@ -337,7 +376,7 @@ is built from r10k's `.r10k-deploy.json` at seal time — so history for past
 deploys cannot be reconstructed after the fact. Losing it costs you the
 `COMMIT` column for old versions, nothing more; nothing stops working.
 
-A rebuilt primary re-seals the same staging directory to the **same `code_id`**,
+A rebuilt primary re-seals the same basedir to the **same `code_id`**,
 because sealing is reproducible. Compilers see no change and download nothing.
 
 ## Decommissioning a compiler

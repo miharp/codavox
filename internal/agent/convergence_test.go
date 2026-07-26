@@ -25,9 +25,9 @@ func build(t *testing.T) string {
 	return bin
 }
 
-func writeEnv(t *testing.T, staging, env string, files map[string]string) {
+func writeEnv(t *testing.T, basedir, env string, files map[string]string) {
 	t.Helper()
-	dir := filepath.Join(staging, env)
+	dir := filepath.Join(basedir, env)
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -139,13 +139,13 @@ func TestAgentAndCodeIDAgreeOnTheEnvironmentOverride(t *testing.T) {
 	bin := build(t)
 	ca := testca.New(t)
 
-	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	basedir := t.TempDir()
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v1\n"})
 
 	const addr = "127.0.0.1:18154"
 	pub := &publisher{
 		bin:     bin,
-		staging: staging,
+		basedir: basedir,
 		addr:    addr,
 		ssldir:  ca.SSLDir(t, "puppet.example.com", "openvox_server"),
 	}
@@ -194,8 +194,8 @@ func TestTwoCompilersConverge(t *testing.T) {
 	bin := build(t)
 	ca := testca.New(t)
 
-	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	basedir := t.TempDir()
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v1\n"})
 
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 	const addr = "127.0.0.1:18152"
@@ -204,7 +204,7 @@ func TestTwoCompilersConverge(t *testing.T) {
 	startPublisher := func(t *testing.T) *exec.Cmd {
 		t.Helper()
 		cmd := exec.Command(bin, "publish",
-			"--staging", staging, "--listen", addr,
+			"--basedir", basedir, "--listen", addr,
 			"--certname", "puppet.example.com", "--ssldir", serverSSL,
 			"--state", t.TempDir())
 		cmd.Stderr = os.Stderr
@@ -253,7 +253,7 @@ func TestTwoCompilersConverge(t *testing.T) {
 
 	// A deploy happens while compiler02 is offline. The publisher must be
 	// restarted because it seals at startup.
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v2\n"})
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v2\n"})
 	_ = pub.Process.Kill()
 	_ = pub.Wait()
 
@@ -323,15 +323,15 @@ func TestAgentWithoutCompilerRoleIsRefused(t *testing.T) {
 	bin := build(t)
 	ca := testca.New(t)
 
-	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "secret\n"})
+	basedir := t.TempDir()
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "secret\n"})
 
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 	const addr = "127.0.0.1:18153"
 	const publisher = "https://" + addr
 
 	cmd := exec.Command(bin, "publish",
-		"--staging", staging, "--listen", addr,
+		"--basedir", basedir, "--listen", addr,
 		"--certname", "puppet.example.com", "--ssldir", serverSSL,
 		"--state", t.TempDir())
 	cmd.Stderr = os.Stderr
@@ -387,13 +387,13 @@ func TestRevokedCompilerLosesAccess(t *testing.T) {
 	bin := build(t)
 	ca := testca.New(t)
 
-	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "secret\n"})
+	basedir := t.TempDir()
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "secret\n"})
 
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 	const addr = "127.0.0.1:18155"
 
-	pub := &publisher{bin: bin, staging: staging, addr: addr, ssldir: serverSSL}
+	pub := &publisher{bin: bin, basedir: basedir, addr: addr, ssldir: serverSSL}
 	pub.restart(t)
 	t.Cleanup(pub.stop)
 
@@ -418,7 +418,7 @@ func TestRevokedCompilerLosesAccess(t *testing.T) {
 	}
 
 	// Advance the served code so a refusal cannot be confused with "nothing to do".
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "rotated\n"})
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "rotated\n"})
 	pub.hup(t)
 
 	var syncErr error
@@ -455,13 +455,13 @@ func TestCompilerWithoutRoleIsAdmittedByCertname(t *testing.T) {
 	bin := build(t)
 	ca := testca.New(t)
 
-	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	basedir := t.TempDir()
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v1\n"})
 
 	const addr = "127.0.0.1:18156"
 	pub := &publisher{
 		bin:     bin,
-		staging: staging,
+		basedir: basedir,
 		addr:    addr,
 		ssldir:  ca.SSLDir(t, "puppet.example.com", "openvox_server"),
 		// No roles at all: this publisher authorizes purely by certname.
@@ -523,16 +523,16 @@ func TestFleetViewMatchesWhatCompilersServe(t *testing.T) {
 	bin := build(t)
 	ca := testca.New(t)
 
-	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v1\n"})
-	writeEnv(t, staging, "testing", map[string]string{"manifests/site.pp": "t1\n"})
+	basedir := t.TempDir()
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v1\n"})
+	writeEnv(t, basedir, "testing", map[string]string{"manifests/site.pp": "t1\n"})
 
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 	const addr = "127.0.0.1:18154"
 	const publisher = "https://" + addr
 
 	pub := exec.Command(bin, "publish",
-		"--staging", staging, "--listen", addr,
+		"--basedir", basedir, "--listen", addr,
 		"--certname", "puppet.example.com", "--ssldir", serverSSL,
 		"--state", t.TempDir())
 	pub.Stderr = os.Stderr
@@ -598,7 +598,7 @@ func TestFleetViewMatchesWhatCompilersServe(t *testing.T) {
 	// And it must report staleness, not just agreement. compiler02 stays away
 	// across a deploy, so the two legitimately diverge — the case the view
 	// exists to make visible.
-	writeEnv(t, staging, "production", map[string]string{"manifests/site.pp": "v2\n"})
+	writeEnv(t, basedir, "production", map[string]string{"manifests/site.pp": "v2\n"})
 	if err := pub.Process.Signal(syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
@@ -679,8 +679,8 @@ func TestCompilersCommandOnThePublisher(t *testing.T) {
 	bin := build(t)
 	ca := testca.New(t)
 
-	staging := t.TempDir()
-	writeEnv(t, staging, "production", map[string]string{
+	basedir := t.TempDir()
+	writeEnv(t, basedir, "production", map[string]string{
 		"manifests/site.pp": "v1\n",
 		// r10k leaves this behind; the publisher reads it to record which
 		// control-repo commit produced the code_id. It is excluded from
@@ -694,7 +694,7 @@ func TestCompilersCommandOnThePublisher(t *testing.T) {
 
 	state := t.TempDir()
 	pub := exec.Command(bin, "publish",
-		"--staging", staging, "--listen", addr,
+		"--basedir", basedir, "--listen", addr,
 		"--certname", "puppet.example.com", "--ssldir", serverSSL,
 		"--state", state)
 	pub.Stderr = os.Stderr

@@ -47,11 +47,11 @@ commit*.
 > **Distribute resolved trees, never instructions for producing them.**
 
 Any design that re-runs resolution per-compiler has split brain built in. This
-is the constraint that forces central staging plus artifact distribution.
+is the constraint that forces central sealing plus artifact distribution.
 
 ## Architecture
 
-1. **Stage** — r10k deploys to a staging dir on one node. Fully resolved.
+1. **Stage** — r10k deploys to a basedir on one node. Fully resolved.
 2. **Seal** — content-hash the tree (hex; see contract). That hash *is* the code_id.
 3. **Publish** — authenticated endpoint exposing current code_id per environment.
 4. **Distribute** — compilers **poll**, fetch the artifact for the new code_id,
@@ -113,14 +113,14 @@ Single Go binary, subcommands:
 ```text
 codavox deploy        # primary: run r10k, seal, trigger a reseal
 codavox deploy-server # primary: deploy API and control-repo webhook
-codavox publish       # primary: seal a staging dir, serve versions + artifacts
+codavox publish       # primary: seal a basedir, serve versions + artifacts
 codavox agent         # compiler: poll, fetch, unpack, symlink-swap, reap
 codavox code-id       # per-compile — must be ~1ms
 codavox code-content  # per static_file_content request
 ```
 
 r10k stays r10k's job: `deploy` runs it and codavox distributes the result, so
-`publish` only ever observes a staging dir it does not manage.
+`publish` only ever observes a basedir it does not manage.
 
 A **separate Forge module** (`voxpupuli/codavox`) to configure it, per Vox
 Pupuli convention, is still planned.
@@ -138,7 +138,7 @@ do not pay for it in source coupling.
 - **Environment deletion** propagating to compilers. *Addressed, opt-in:* with
   `--prune-environments`, an agent removes an environment the publisher no longer
   serves, guarded so a failed or empty poll never deletes. It relies on r10k
-  purging the removed environment from staging.
+  purging the removed environment from the basedir.
 - **puppetserver's environment cache** interacting with symlink swaps.
 - **Poller robustness** — *addressed:* a poll failure is logged and retried on
   the next tick rather than being fatal, so a publisher outage degrades to "no

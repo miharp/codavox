@@ -18,7 +18,7 @@ func writeConfig(t *testing.T, body string) string {
 
 func TestLoadParsesFields(t *testing.T) {
 	path := writeConfig(t, `
-staging: /etc/puppetlabs/code-staging
+basedir: /etc/puppetlabs/code/environments
 state: /opt/puppetlabs/codavox/state
 ssldir: /etc/puppetlabs/puppet/ssl
 certname: primary.example.com
@@ -42,8 +42,8 @@ agent:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if c.Staging != "/etc/puppetlabs/code-staging" {
-		t.Errorf("staging = %q", c.Staging)
+	if c.BaseDir != "/etc/puppetlabs/code/environments" {
+		t.Errorf("basedir = %q", c.BaseDir)
 	}
 	if c.Certname != "primary.example.com" {
 		t.Errorf("certname = %q", c.Certname)
@@ -74,20 +74,20 @@ func TestLoadNoConfigIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with no config should not error: %v", err)
 	}
-	if c.Staging != "" || c.Publish.Listen != "" {
+	if c.BaseDir != "" || c.Publish.Listen != "" {
 		t.Errorf("expected an empty config, got %+v", c)
 	}
 }
 
 func TestLoadUsesEnvVar(t *testing.T) {
-	path := writeConfig(t, "staging: /from/env\n")
+	path := writeConfig(t, "basedir: /from/env\n")
 	t.Setenv(PathEnvVar, path)
 	c, err := Load("") // no flag path; env should be consulted
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Staging != "/from/env" {
-		t.Errorf("staging = %q, want /from/env", c.Staging)
+	if c.BaseDir != "/from/env" {
+		t.Errorf("basedir = %q, want /from/env", c.BaseDir)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestLoadEmptyFileIsEmptyConfig(t *testing.T) {
 	for name, body := range map[string]string{
 		"empty file":        "",
 		"only a newline":    "\n",
-		"only comments":     "# staging: /x\n# nothing set\n",
+		"only comments":     "# basedir: /x\n# nothing set\n",
 		"comments and gaps": "\n\n# codavox config\n\n",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -136,20 +136,20 @@ func TestExampleConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.example.yaml does not load: %v", err)
 	}
-	if c.Staging == "" || c.Agent.Publisher == "" {
+	if c.BaseDir == "" || c.Agent.Publisher == "" {
 		t.Errorf("the example parsed but looks empty: %+v", c)
 	}
 }
 
 func TestLoadRejectsUnknownField(t *testing.T) {
-	path := writeConfig(t, "stagng: /typo\n") // misspelled "staging"
+	path := writeConfig(t, "stagng: /typo\n") // misspelled "basedir"
 	if _, err := Load(path); err == nil {
 		t.Error("expected error for an unknown field (a typo would otherwise be silently ignored)")
 	}
 }
 
 func TestLoadRejectsMalformedYAML(t *testing.T) {
-	path := writeConfig(t, "staging: [unterminated\n")
+	path := writeConfig(t, "basedir: [unterminated\n")
 	if _, err := Load(path); err == nil {
 		t.Error("expected error for malformed YAML")
 	}

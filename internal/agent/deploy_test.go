@@ -14,12 +14,12 @@ import (
 
 // fakeR10k writes a stand-in r10k that stages one environment with the given
 // content, so the deploy command has something to run.
-func fakeR10k(t *testing.T, staging, env, body string) string {
+func fakeR10k(t *testing.T, basedir, env, body string) string {
 	t.Helper()
 	script := fmt.Sprintf("#!/bin/sh\nmkdir -p %q\nprintf %q > %q\nprintf '{\"name\":%q,\"signature\":\"abcdef1\"}' > %q\n",
-		filepath.Join(staging, env, "manifests"),
-		body, filepath.Join(staging, env, "manifests", "site.pp"),
-		env, filepath.Join(staging, env, ".r10k-deploy.json"))
+		filepath.Join(basedir, env, "manifests"),
+		body, filepath.Join(basedir, env, "manifests", "site.pp"),
+		env, filepath.Join(basedir, env, ".r10k-deploy.json"))
 	path := filepath.Join(t.TempDir(), "r10k")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
@@ -50,21 +50,21 @@ func TestDeployStagesSignalsAndServes(t *testing.T) {
 
 	bin := build(t)
 	ca := testca.New(t)
-	staging := t.TempDir()
+	basedir := t.TempDir()
 	state := t.TempDir()
 	serverSSL := ca.SSLDir(t, "puppet.example.com", "openvox_server")
 
-	// The publisher starts against empty staging and must be running — with its
+	// The publisher starts against empty basedir and must be running — with its
 	// pidfile written — before the deploy can signal it.
-	pub := &publisher{bin: bin, staging: staging, addr: "127.0.0.1:18158", ssldir: serverSSL, state: state}
+	pub := &publisher{bin: bin, basedir: basedir, addr: "127.0.0.1:18158", ssldir: serverSSL, state: state}
 	pub.restart(t)
 	t.Cleanup(pub.stop)
 	waitForFile(t, filepath.Join(state, "publish.pid"))
 
 	// Deploy: run the fake r10k, signal the publisher, wait until it serves.
-	r10k := fakeR10k(t, staging, "production", "v1\n")
+	r10k := fakeR10k(t, basedir, "production", "v1\n")
 	cmd := exec.Command(bin, "deploy", "production", "--wait",
-		"--r10k", r10k, "--staging", staging, "--state", state)
+		"--r10k", r10k, "--basedir", basedir, "--state", state)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

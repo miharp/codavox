@@ -111,7 +111,7 @@ you enable the ones a node needs and the config supplies their settings:
 
 ```console
 # on the primary
-systemctl enable --now codavox-publish        # needs config: staging
+systemctl enable --now codavox-publish        # needs config: basedir
 systemctl enable --now codavox-deploy-server   # needs config: api_token and/or secret
 
 # on each compiler (after wiring OpenVox Server — see below)

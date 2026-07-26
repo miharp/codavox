@@ -53,7 +53,7 @@ Usage:
         print the canonical manifest instead. With --archive, also write a
         deterministic artifact.
 
-  codavox publish --staging <dir> [--listen <addr>] [--certname <name>]
+  codavox publish --basedir <dir> [--listen <addr>] [--certname <name>]
                   [--ssldir <dir>] [--allow-role <role>] [--allow-certname <cn>]
                   [--certificate-revocation chain|leaf|false]
         Serve environment versions and artifacts to compilers over mutual TLS,
@@ -69,13 +69,13 @@ Usage:
 
   codavox deploy <environment>... | --all [--wait] [--no-modules]
                  [--r10k <path>] [--r10k-config <file>]
-                 [--staging <dir>] [--state <dir>] [--json]
+                 [--basedir <dir>] [--state <dir>] [--json]
         Run r10k to stage code, then trigger the publisher to reseal. Run this
         on the primary. With --wait, block until the new code_id is served.
 
   codavox deploy-server [--api-token <file>] [--secret <file>]
                         [--listen <addr>] [--no-tls] [--history <n>]
-                        --staging <dir> [--state <dir>]
+                        --basedir <dir> [--state <dir>]
                         [--r10k <path>] [--r10k-config <file>]
                         [--certname <name>] [--ssldir <dir>]
         Serve the deploy API and/or webhook on the primary. --api-token enables
@@ -210,7 +210,7 @@ func codeContent(args []string) error {
 // sealTree derives the code_id for a staged tree, and optionally writes the
 // artifact a compiler would receive.
 //
-// It only reads the directory. Staging stays r10k's job: codavox not owning
+// It only reads the directory. BaseDir stays r10k's job: codavox not owning
 // the deploy keeps the trust boundary small and lets existing r10k workflows
 // continue untouched.
 func sealTree(args []string) error {
@@ -286,7 +286,7 @@ func sealTree(args []string) error {
 // would create a second trust root to rotate and revoke.
 func publishServe(args []string) error {
 	opts := struct {
-		staging    string
+		basedir    string
 		listen     string
 		certname   string
 		ssldir     string
@@ -304,7 +304,7 @@ func publishServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	overlay(&opts.staging, cfg.Staging)
+	overlay(&opts.basedir, cfg.BaseDir)
 	overlay(&opts.state, cfg.State)
 	overlay(&opts.ssldir, cfg.SSLDir)
 	overlay(&opts.certname, cfg.Certname)
@@ -329,8 +329,8 @@ func publishServe(args []string) error {
 		switch args[i] {
 		case "--config":
 			_, err = next() // already loaded; consume the value
-		case "--staging":
-			opts.staging, err = next()
+		case "--basedir":
+			opts.basedir, err = next()
 		case "--listen":
 			opts.listen, err = next()
 		case "--certname":
@@ -359,8 +359,8 @@ func publishServe(args []string) error {
 		}
 	}
 
-	if opts.staging == "" {
-		return fmt.Errorf("publish needs --staging <dir>")
+	if opts.basedir == "" {
+		return fmt.Errorf("publish needs --basedir <dir>")
 	}
 	if opts.certname == "" {
 		hostname, err := os.Hostname()
@@ -391,7 +391,7 @@ func publishServe(args []string) error {
 		return err
 	}
 
-	store := publish.NewStore(opts.staging, publish.ArtifactsDir(opts.state))
+	store := publish.NewStore(opts.basedir, publish.ArtifactsDir(opts.state))
 
 	provLog, err := publish.OpenLog(filepath.Join(opts.state, provenanceFile))
 	if err != nil {
@@ -431,7 +431,7 @@ func publishServe(args []string) error {
 	defer stop()
 
 	// SIGHUP triggers a reseal. codavox does not own the deploy — it observes a
-	// staging directory r10k controls — so it cannot hook "r10k finished" in
+	// basedir directory r10k controls — so it cannot hook "r10k finished" in
 	// process the way PE's Code Manager does. An operator, or r10k's postrun
 	// hook, sends SIGHUP after a deploy completes. Because the signal fires only
 	// once the deploy has returned, the tree is quiescent and no reseal ever
@@ -638,7 +638,7 @@ func deployRun(args []string) error {
 		noModules  bool
 		r10k       string
 		r10kConfig string
-		staging    string
+		basedir    string
 		state      string
 		asJSON     bool
 	}{
@@ -649,7 +649,7 @@ func deployRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	overlay(&opts.staging, cfg.Staging)
+	overlay(&opts.basedir, cfg.BaseDir)
 	overlay(&opts.state, cfg.State)
 	overlay(&opts.r10k, cfg.R10k)
 	overlay(&opts.r10kConfig, cfg.R10kConfig)
@@ -678,8 +678,8 @@ func deployRun(args []string) error {
 			opts.r10k, err = next()
 		case "--r10k-config":
 			opts.r10kConfig, err = next()
-		case "--staging":
-			opts.staging, err = next()
+		case "--basedir":
+			opts.basedir, err = next()
 		case "--state":
 			opts.state, err = next()
 		default:
@@ -693,14 +693,14 @@ func deployRun(args []string) error {
 		}
 	}
 
-	if opts.staging == "" {
-		return fmt.Errorf("deploy needs --staging <dir> (r10k's basedir, the same the publisher serves)")
+	if opts.basedir == "" {
+		return fmt.Errorf("deploy needs --basedir <dir> (r10k's basedir, the same the publisher serves)")
 	}
 
 	results, runErr := deploy.Run(deploy.Config{
 		R10kPath:   opts.r10k,
 		R10kConfig: opts.r10kConfig,
-		StagingDir: opts.staging,
+		BaseDir:    opts.basedir,
 		StateDir:   opts.state,
 		Modules:    !opts.noModules,
 	}, opts.envs, opts.all, opts.wait)
@@ -758,7 +758,7 @@ func deployServer(args []string) error {
 		secretFile   string
 		listen       string
 		noTLS        bool
-		staging      string
+		basedir      string
 		state        string
 		r10k         string
 		r10kConfig   string
@@ -779,7 +779,7 @@ func deployServer(args []string) error {
 	overlay(&opts.apiTokenFile, cfg.DeployServer.APIToken)
 	overlay(&opts.secretFile, cfg.DeployServer.Secret)
 	overlay(&opts.listen, cfg.DeployServer.Listen)
-	overlay(&opts.staging, cfg.Staging)
+	overlay(&opts.basedir, cfg.BaseDir)
 	overlay(&opts.state, cfg.State)
 	overlay(&opts.r10k, cfg.R10k)
 	overlay(&opts.r10kConfig, cfg.R10kConfig)
@@ -810,8 +810,8 @@ func deployServer(args []string) error {
 			opts.listen, err = next()
 		case "--no-tls":
 			opts.noTLS = true
-		case "--staging":
-			opts.staging, err = next()
+		case "--basedir":
+			opts.basedir, err = next()
 		case "--state":
 			opts.state, err = next()
 		case "--r10k":
@@ -834,8 +834,8 @@ func deployServer(args []string) error {
 		}
 	}
 
-	if opts.staging == "" {
-		return fmt.Errorf("deploy-server needs --staging <dir>")
+	if opts.basedir == "" {
+		return fmt.Errorf("deploy-server needs --basedir <dir>")
 	}
 	apiToken, err := readSecretFile(opts.apiTokenFile)
 	if err != nil {
@@ -854,7 +854,7 @@ func deployServer(args []string) error {
 		Deployer: deployserver.Runner{Config: deploy.Config{
 			R10kPath:   opts.r10k,
 			R10kConfig: opts.r10kConfig,
-			StagingDir: opts.staging,
+			BaseDir:    opts.basedir,
 			StateDir:   opts.state,
 			Modules:    true,
 		}},

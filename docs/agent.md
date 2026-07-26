@@ -144,13 +144,13 @@ Deletion is destructive, so it is guarded:
 - **Only after a successful poll.** A publisher that is unreachable is never read
   as "every environment was deleted"; a failed poll prunes nothing.
 - **Never on an empty advertisement.** If the publisher serves *zero*
-  environments — far more likely a misconfiguration or an empty staging
+  environments — far more likely a misconfiguration or an empty basedir
   directory than a real mass deletion — the agent prunes nothing and logs a
   warning. Deleting the last environment stays a manual action.
 
 For a deletion to reach here at all, r10k must be configured to purge removed
-environments from staging (`purge_levels` in `r10k.yaml`); otherwise the deleted
-branch never leaves the publisher's staging directory. See
+environments from the basedir (`purge_levels` in `r10k.yaml`); otherwise the deleted
+branch never leaves the publisher's basedir. See
 [deploying.md](deploying.md#deleting-environments).
 
 ## Reporting what it serves

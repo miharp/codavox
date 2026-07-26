@@ -17,7 +17,7 @@ fail() { printf '\033[1;31m  FAIL\033[0m %s\n' "$1" >&2; FAILED=1; }
 # Change the served tree so the next reseal yields a new code_id, then reseal.
 bump_and_reseal() {
   docker exec "$PRIMARY" bash -lc \
-    "echo '# bump $(date +%s%N)' >> /etc/puppetlabs/code-staging/production/manifests/site.pp"
+    "echo '# bump $(date +%s%N)' >> /etc/puppetlabs/code/environments/production/manifests/site.pp"
   docker exec "$PRIMARY" systemctl reload codavox-publish
 }
 
