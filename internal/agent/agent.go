@@ -50,6 +50,10 @@ const (
 // Agent polls a publisher and converges local state onto it.
 type Agent struct {
 	cfg Config
+
+	// syncFailures collapses a run of identical poll failures. Only Run touches
+	// it, so a single agent loop owns it and Once stays free of logging state.
+	syncFailures failureLog
 }
 
 // New returns an Agent, filling in defaults.
@@ -83,9 +87,7 @@ func New(cfg Config) (*Agent, error) {
 // outage degrades to "no new deploys" rather than "no catalogs" — which is the
 // property that makes this better than a shared filesystem.
 func (a *Agent) Run(ctx context.Context) error {
-	if err := a.Once(ctx); err != nil {
-		a.cfg.Logger.Error("initial sync failed", "error", err)
-	}
+	a.reportSync(a.Once(ctx))
 
 	for {
 		// Jitter spreads a fleet of compilers out; without it, restarting them
@@ -95,11 +97,22 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(wait):
-			if err := a.Once(ctx); err != nil {
-				a.cfg.Logger.Error("sync failed", "error", err)
-			}
+			a.reportSync(a.Once(ctx))
 		}
 	}
+}
+
+// reportSync logs the outcome of one reconciliation.
+//
+// Repeats are collapsed rather than logged per poll: an unreachable publisher is
+// a survivable state, and describing it at ERROR every interval buries the moment
+// it started and trains people to ignore the level. See failureLog.
+func (a *Agent) reportSync(err error) {
+	if err != nil {
+		a.syncFailures.failed(a.cfg.Logger, "sync failed", err)
+		return
+	}
+	a.syncFailures.succeeded(a.cfg.Logger, "sync recovered")
 }
 
 // Once performs a single reconciliation against the publisher.
