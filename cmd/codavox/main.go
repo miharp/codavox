@@ -342,11 +342,17 @@ func publishServe(args []string) error {
 		case "--allow-role":
 			var r string
 			if r, err = next(); err == nil {
+				if r == "" {
+					return fmt.Errorf("--allow-role cannot be empty")
+				}
 				opts.roles = append(opts.roles, r)
 			}
 		case "--allow-certname":
 			var c string
 			if c, err = next(); err == nil {
+				if c == "" {
+					return fmt.Errorf("--allow-certname cannot be empty")
+				}
 				opts.certnames = append(opts.certnames, c)
 			}
 		case "--certificate-revocation":
@@ -374,6 +380,21 @@ func publishServe(args []string) error {
 	// of nodes.
 	if len(opts.roles) == 0 && len(opts.certnames) == 0 {
 		opts.roles = []string{"openvox_compiler"}
+	}
+
+	// An empty entry passes the "authorizes nobody" guard in ServerTLS, because the
+	// list is non-empty, and then matches nothing — so the publisher starts and
+	// refuses the whole estate, with a trailing space in one startup line as the
+	// only clue. Reject it here, where the message can name the setting.
+	for _, r := range opts.roles {
+		if strings.TrimSpace(r) == "" {
+			return fmt.Errorf("publish.allow_roles contains an empty entry")
+		}
+	}
+	for _, c := range opts.certnames {
+		if strings.TrimSpace(c) == "" {
+			return fmt.Errorf("publish.allow_certnames contains an empty entry")
+		}
 	}
 
 	revocation, err := puppetca.ParseRevocationMode(opts.revocation)
