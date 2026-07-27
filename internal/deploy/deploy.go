@@ -173,7 +173,14 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 			}
 		}
 	} else if signalErr != nil {
-		_, _ = fmt.Fprintf(stderr(cfg), "codavox: %v; basedir is updated but nothing is serving it yet\n", signalErr)
+		// A hard error, not a warning. r10k updated the basedir, but nothing was
+		// told to seal it, so no compiler will ever see this deploy — and the
+		// per-environment results say "deployed" with a fresh code_id beside it.
+		// Exiting 0 there would be exactly the failure this project exists to
+		// prevent: a plausible success while the real outcome is wrong, which CI
+		// records as green and nobody notices until compilers are found stale.
+		_, _ = fmt.Fprintf(stderr(cfg), "codavox: %v\n", signalErr)
+		return results, fmt.Errorf("deployed to the basedir but nothing is serving it: %w", signalErr)
 	}
 
 	return results, summarize(results)

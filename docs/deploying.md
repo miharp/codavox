@@ -66,9 +66,28 @@ own, and a stronger fleet-wide wait is a later feature.
 `<state>/publish.pid`. It verifies the process is alive before signaling, so a
 stale pidfile from a crashed publisher is reported rather than acted on.
 
-If no publisher is running, `deploy` still stages the code and reports each
-`code_id`, but warns that nothing is serving it yet; `--wait` in that case is an
-error, because nothing will materialize the new version to wait for.
+Only a live publisher's claim on that file counts. A second `codavox publish`
+sharing the state directory is refused — `a publisher is already running as pid N`
+— rather than displacing the incumbent, and a pidfile left behind by a crash or a
+`SIGKILL` is taken over, since nothing gets to clean up after those.
+
+**If no publisher can be signalled, `deploy` exits 1.** It still stages the code
+and still reports each `code_id`, because the caller needs to know the basedir
+moved — but the deploy has not achieved what it was asked to do, and no compiler
+will ever see it:
+
+```console
+$ codavox deploy production
+production   deployed   de85ed717e0a…   (commit 4786bf9)
+codavox: deployed to the basedir but nothing is serving it: no running publisher (no pidfile)
+$ echo $?
+1
+```
+
+Exiting 0 there would print a fresh `code_id` beside the word `deployed` while
+nothing served it, which CI records as a green deploy — the plausible-but-wrong
+success this project exists to prevent. `--wait` has always been an error in that
+case, because there is nothing to wait for; now the plain form agrees with it.
 
 The same signal an operator or r10k `postrun` hook sends (see
 [publishing.md](publishing.md#resealing)) is what `deploy` sends for you, so a

@@ -417,15 +417,15 @@ func publishServe(args []string) error {
 		opts.listen, opts.certname,
 		joinOrNone(opts.roles), joinOrNone(opts.certnames), revocation)
 
-	// Record the pid so a deploy can signal this publisher to reseal.
-	pidPath := publish.PidFilePath(opts.state)
-	if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err != nil {
-		return fmt.Errorf("creating state directory: %w", err)
+	// Claim the state directory, so a deploy can signal this publisher to reseal.
+	//
+	// Acquired before the listener rather than after: a second publisher that
+	// would fail to bind must not get as far as touching the incumbent's claim.
+	pidFile, err := publish.AcquirePidFile(opts.state)
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil { // #nosec G306
-		return fmt.Errorf("writing pidfile: %w", err)
-	}
-	defer func() { _ = os.Remove(pidPath) }()
+	defer pidFile.Release()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

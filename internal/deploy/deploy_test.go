@@ -3,7 +3,10 @@ package deploy
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,12 +40,14 @@ func writeFakeR10k(t *testing.T, basedir string, envs []string, exitCode int) st
 
 func TestRunDeploysAndSeals(t *testing.T) {
 	basedir := t.TempDir()
+	state := t.TempDir()
 	r10k := writeFakeR10k(t, basedir, []string{"production"}, 0)
+	fakePublisher(t, state)
 
 	results, err := Run(Config{
 		R10kPath: r10k,
 		BaseDir:  basedir,
-		StateDir: t.TempDir(),
+		StateDir: state,
 		Modules:  true,
 	}, []string{"production"}, false, false)
 	if err != nil {
@@ -72,12 +77,14 @@ func TestRunDeploysAndSeals(t *testing.T) {
 
 func TestRunAllListsStagedEnvironments(t *testing.T) {
 	basedir := t.TempDir()
+	state := t.TempDir()
 	r10k := writeFakeR10k(t, basedir, []string{"production", "testing"}, 0)
+	fakePublisher(t, state)
 
 	results, err := Run(Config{
 		R10kPath: r10k,
 		BaseDir:  basedir,
-		StateDir: t.TempDir(),
+		StateDir: state,
 	}, nil, true, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -186,6 +193,7 @@ func TestConcurrentDeploysSerialize(t *testing.T) {
 	state := t.TempDir()
 	marker := t.TempDir()
 	r10k := writeSerializingR10k(t, basedir, marker)
+	fakePublisher(t, state)
 
 	cfg := Config{
 		R10kPath:    r10k,
@@ -209,5 +217,61 @@ func TestConcurrentDeploysSerialize(t *testing.T) {
 		if err != nil {
 			t.Errorf("deploy %d failed (overlap not prevented?): %v", i, err)
 		}
+	}
+}
+
+// fakePublisher writes a pidfile naming a real, live process so SignalPublisher
+// finds something to signal.
+//
+// A deploy that cannot reach a publisher is a hard error now, so a test
+// exercising staging and sealing still has to satisfy that — and satisfying it
+// with a real process rather than a stub means the liveness probe and the SIGHUP
+// are genuinely exercised instead of skipped.
+func fakePublisher(t *testing.T, stateDir string) {
+	t.Helper()
+	// A sleep that ignores nothing: SIGHUP terminates it, which is fine. The
+	// deploy only needs the signal to be delivered.
+	cmd := exec.Command("sleep", "300")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting a stand-in publisher: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(publish.PidFilePath(stateDir),
+		[]byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The second half of #56: a deploy that updated the basedir but could not tell
+// anything to seal it has not deployed. It used to print the new code_id beside
+// the word "deployed" and exit 0, so CI recorded a green deploy that no compiler
+// would ever see.
+func TestRunFailsWhenThePublisherCannotBeSignalled(t *testing.T) {
+	basedir := t.TempDir()
+	r10k := writeFakeR10k(t, basedir, []string{"production"}, 0)
+
+	// No fakePublisher: nothing is listening for the SIGHUP.
+	results, err := Run(Config{
+		R10kPath: r10k,
+		BaseDir:  basedir,
+		StateDir: t.TempDir(),
+	}, []string{"production"}, false, false)
+
+	if err == nil {
+		t.Fatal("a deploy nothing will serve reported success")
+	}
+	if !strings.Contains(err.Error(), "nothing is serving it") {
+		t.Errorf("error = %v, want it to say nothing is serving the deploy", err)
+	}
+	// The staging half did happen, and the results still describe it — the caller
+	// needs both facts to know what state the node is in.
+	if len(results) != 1 || results[0].CodeID == "" {
+		t.Errorf("results = %+v, want the sealed environment reported alongside the error", results)
 	}
 }

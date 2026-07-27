@@ -460,10 +460,6 @@ func ArtifactPathFor(stateDir, env, codeID string) string {
 	return filepath.Join(ArtifactsDir(stateDir), layout.VersionDirName(env, codeID)+".tar.gz")
 }
 
-// PidFilePath is where the running publisher records its pid, so a deploy can
-// signal it to reseal.
-func PidFilePath(stateDir string) string { return filepath.Join(stateDir, "publish.pid") }
-
 // EnvironmentsPath is the polling endpoint compilers use.
 const EnvironmentsPath = "/v1/environments"
 
