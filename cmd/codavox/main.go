@@ -342,11 +342,17 @@ func publishServe(args []string) error {
 		case "--allow-role":
 			var r string
 			if r, err = next(); err == nil {
+				if r == "" {
+					return fmt.Errorf("--allow-role cannot be empty")
+				}
 				opts.roles = append(opts.roles, r)
 			}
 		case "--allow-certname":
 			var c string
 			if c, err = next(); err == nil {
+				if c == "" {
+					return fmt.Errorf("--allow-certname cannot be empty")
+				}
 				opts.certnames = append(opts.certnames, c)
 			}
 		case "--certificate-revocation":
@@ -374,6 +380,21 @@ func publishServe(args []string) error {
 	// of nodes.
 	if len(opts.roles) == 0 && len(opts.certnames) == 0 {
 		opts.roles = []string{"openvox_compiler"}
+	}
+
+	// An empty entry passes the "authorizes nobody" guard in ServerTLS, because the
+	// list is non-empty, and then matches nothing — so the publisher starts and
+	// refuses the whole estate, with a trailing space in one startup line as the
+	// only clue. Reject it here, where the message can name the setting.
+	for _, r := range opts.roles {
+		if strings.TrimSpace(r) == "" {
+			return fmt.Errorf("publish.allow_roles contains an empty entry")
+		}
+	}
+	for _, c := range opts.certnames {
+		if strings.TrimSpace(c) == "" {
+			return fmt.Errorf("publish.allow_certnames contains an empty entry")
+		}
 	}
 
 	revocation, err := puppetca.ParseRevocationMode(opts.revocation)
@@ -417,15 +438,15 @@ func publishServe(args []string) error {
 		opts.listen, opts.certname,
 		joinOrNone(opts.roles), joinOrNone(opts.certnames), revocation)
 
-	// Record the pid so a deploy can signal this publisher to reseal.
-	pidPath := publish.PidFilePath(opts.state)
-	if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err != nil {
-		return fmt.Errorf("creating state directory: %w", err)
+	// Claim the state directory, so a deploy can signal this publisher to reseal.
+	//
+	// Acquired before the listener rather than after: a second publisher that
+	// would fail to bind must not get as far as touching the incumbent's claim.
+	pidFile, err := publish.AcquirePidFile(opts.state)
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil { // #nosec G306
-		return fmt.Errorf("writing pidfile: %w", err)
-	}
-	defer func() { _ = os.Remove(pidPath) }()
+	defer pidFile.Release()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

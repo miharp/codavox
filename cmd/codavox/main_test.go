@@ -328,3 +328,51 @@ func TestFleetRecordsJSON(t *testing.T) {
 		t.Errorf("testing has a commit it never recorded: %+v", got[0].Commits)
 	}
 }
+
+// #55: an empty entry passes ServerTLS's "authorizes nobody" guard, because the
+// list is non-empty — and then matches nothing, so the publisher starts and
+// refuses the whole estate. The only clue was a trailing space in one startup
+// line, which is the silent misconfiguration this tool otherwise refuses to allow.
+func TestPublishRejectsEmptyAllowlistEntries(t *testing.T) {
+	dir := t.TempDir()
+	basedir := filepath.Join(dir, "environments")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"empty --allow-role", []string{"--allow-role", ""}, "allow-role"},
+		{"empty --allow-certname", []string{"--allow-certname", ""}, "allow-certname"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--basedir", basedir}, tc.args...)
+			err := run("publish", args)
+			if err == nil {
+				t.Fatal("started with an empty allowlist entry")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to name %s", err, tc.want)
+			}
+		})
+	}
+}
+
+// A non-empty value is still accepted, so the check has not broken the setting.
+func TestPublishAcceptsNonEmptyAllowlistEntries(t *testing.T) {
+	dir := t.TempDir()
+	basedir := filepath.Join(dir, "environments")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// This fails later, on SSL material that does not exist here — the point is
+	// that it gets past allowlist validation rather than being rejected for it.
+	err := run("publish", []string{"--basedir", basedir, "--allow-role", "openvox_compiler",
+		"--ssldir", filepath.Join(dir, "nossl")})
+	if err != nil && strings.Contains(err.Error(), "allow-role") {
+		t.Errorf("a valid role was rejected: %v", err)
+	}
+}
