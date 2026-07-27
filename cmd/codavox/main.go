@@ -434,6 +434,7 @@ func publishServe(args []string) error {
 	for env, id := range store.Environments() {
 		fmt.Fprintf(os.Stderr, "sealed %s %s\n", env, id)
 	}
+	reportSkipped(store)
 	fmt.Fprintf(os.Stderr, "listening on %s as %s (roles: %s, certnames: %s, revocation: %s)\n",
 		opts.listen, opts.certname,
 		joinOrNone(opts.roles), joinOrNone(opts.certnames), revocation)
@@ -478,6 +479,7 @@ func publishServe(args []string) error {
 				for env, id := range store.Environments() {
 					fmt.Fprintf(os.Stderr, "resealed %s %s\n", env, id)
 				}
+				reportSkipped(store)
 			}
 		}
 	}()
@@ -995,6 +997,19 @@ func overlay(dst *string, v string) {
 // reaches a compiler and never feeds code-id, which stays a single symlink read.
 func defaultStateDir() string {
 	return filepath.Join(layout.New().Root, "state")
+}
+
+// reportSkipped names directories the reseal declined to seal.
+//
+// Once per reseal, and only for names that are not valid environments — so it
+// cannot become chatty, and an operator who names a branch `feature-foo` learns
+// why it never reached a compiler instead of having to work it out.
+func reportSkipped(store *publish.Store) {
+	for _, name := range store.Skipped() {
+		fmt.Fprintf(os.Stderr,
+			"skipped %s: not a valid environment name (letters, digits and _ only); OpenVox Server will not load it either\n",
+			name)
+	}
 }
 
 // listenPort extracts the port from a listen address, so a publisher moved off

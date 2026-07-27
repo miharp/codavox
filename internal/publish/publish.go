@@ -36,8 +36,9 @@ type Store struct {
 	// observe a half-written tree from an r10k deploy that is still in progress.
 	ArtifactDir string
 
-	mu     sync.RWMutex
-	sealed map[string]sealedEnv // environment -> {code_id, artifact}
+	mu      sync.RWMutex
+	sealed  map[string]sealedEnv // environment -> {code_id, artifact}
+	skipped []string             // directories the last reseal declined to seal
 
 	// prov, when set, records where each sealed tree came from. It is optional
 	// because it is diagnostic: a Store with no log still seals and serves.
@@ -82,6 +83,7 @@ func (s *Store) Reseal() error {
 
 	next := map[string]sealedEnv{}
 	var failures []string
+	var skipped []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -89,7 +91,22 @@ func (s *Store) Reseal() error {
 		env := e.Name()
 		// Skip rather than fail: one badly named directory in the basedir area
 		// should not stop every other environment from being published.
+		//
+		// Report it, though. OpenVox Server rejects exactly the same names — a
+		// directory it will not load is one codavox will not seal — so silence
+		// here matches the platform but helps nobody. r10k turns branches into
+		// environments, so a branch named `feature-foo` produces a directory that
+		// is skipped everywhere and explained nowhere: the operator sees it
+		// deployed on the primary, never sees it on a compiler, and nothing says
+		// why. codavox already prints a line per environment on every reseal, so
+		// it is the one component positioned to say so.
 		if layout.ValidateEnvironment(env) != nil {
+			// Dot-prefixed directories are deliberate — .git, editor state, r10k
+			// bookkeeping — so naming them every reseal would be the noise this is
+			// trying to avoid.
+			if !strings.HasPrefix(env, ".") {
+				skipped = append(skipped, env)
+			}
 			continue
 		}
 		envDir := filepath.Join(s.BaseDir, env)
@@ -136,9 +153,12 @@ func (s *Store) Reseal() error {
 		}
 	}
 
+	sort.Strings(skipped)
+
 	s.mu.Lock()
 	old := s.sealed
 	s.sealed = next
+	s.skipped = skipped
 	s.mu.Unlock()
 
 	reapArtifacts(old, next)
@@ -148,6 +168,19 @@ func (s *Store) Reseal() error {
 		return fmt.Errorf("%w: %s", ErrPartialReseal, strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+// Skipped lists directories the last reseal declined to seal because their names
+// are not valid environment names, sorted.
+//
+// It is reported rather than returned as an error: a directory OpenVox Server
+// would also refuse to load is not a failure of this deploy, and treating it as
+// one would stop the publisher over something the platform ignores. But it is
+// worth saying once per reseal, because nothing else in the estate will say it.
+func (s *Store) Skipped() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.skipped...)
 }
 
 // ErrPartialReseal means some environments sealed and others did not. Callers

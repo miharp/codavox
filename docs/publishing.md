@@ -301,9 +301,27 @@ across a process boundary because codavox observes rather than runs r10k.
 `SIGTERM` and interrupt shut the server down gracefully, draining in-flight
 downloads.
 
-A directory whose name OpenVox Server would reject is skipped rather than
-treated as fatal — one badly named directory in the basedir should not
-stop every other environment from being published.
+### Directories that are not environments
+
+A directory whose name OpenVox Server would reject is skipped rather than treated
+as fatal — one badly named directory in the basedir should not stop every other
+environment from being published — and it is named once per reseal:
+
+```text
+sealed production 23679b617bba…
+skipped feature-my-branch: not a valid environment name (letters, digits and _ only); OpenVox Server will not load it either
+```
+
+The rule is OpenVox Server's own, so a directory codavox will not seal is one the
+server will not load either. That is what made the silence it replaces so
+unhelpful: r10k turns branches into environments, so a branch named
+`feature-my-branch` deploys on the primary, never appears on any compiler, and
+nothing anywhere says why. codavox already prints a line per environment, so it is
+the one component positioned to say so.
+
+Dot-prefixed directories — `.git`, `.r10k-cache`, editor state — are skipped
+silently. Those are deliberate, and naming them every reseal would be the noise
+this exists to avoid.
 
 ## Provenance
 

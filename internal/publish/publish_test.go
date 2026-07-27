@@ -571,3 +571,103 @@ func TestTrimBase(t *testing.T) {
 		}
 	}
 }
+
+// #49: a directory whose name is not a valid environment was skipped silently.
+// r10k turns branches into environments, so a branch named `feature-foo` becomes
+// a directory that is skipped everywhere and explained nowhere.
+func TestResealReportsSkippedDirectories(t *testing.T) {
+	s := basedir(t, map[string]map[string]string{
+		"production": {"manifests/site.pp": "node default { }\n"},
+	})
+
+	for _, name := range []string{"feature-foo", "has.dots", "with space"} {
+		if err := os.MkdirAll(filepath.Join(s.BaseDir, name, "manifests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Reseal(); err != nil {
+		t.Fatalf("one bad name must not fail the reseal: %v", err)
+	}
+
+	// The valid environment is unaffected — skipping is not failing.
+	if _, ok := s.Environments()["production"]; !ok {
+		t.Error("production stopped being served because of an unrelated directory")
+	}
+
+	got := s.Skipped()
+	want := []string{"feature-foo", "has.dots", "with space"}
+	if len(got) != len(want) {
+		t.Fatalf("skipped = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("skipped[%d] = %q, want %q (sorted, so the report is stable)", i, got[i], want[i])
+		}
+	}
+}
+
+// Dot-prefixed directories are deliberate — .git, editor state, r10k bookkeeping.
+// Naming them every reseal would be the noise this is meant to avoid.
+func TestResealDoesNotReportDotDirectories(t *testing.T) {
+	s := basedir(t, map[string]map[string]string{
+		"production": {"manifests/site.pp": "node default { }\n"},
+	})
+	for _, name := range []string{".git", ".r10k-cache", ".idea"} {
+		if err := os.MkdirAll(filepath.Join(s.BaseDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Skipped(); len(got) != 0 {
+		t.Errorf("dot-prefixed directories were reported: %v", got)
+	}
+}
+
+// A reseal that finds nothing wrong must report nothing, or the line stops
+// meaning anything.
+func TestResealReportsNothingWhenEverythingIsValid(t *testing.T) {
+	s := basedir(t, map[string]map[string]string{
+		"production": {"manifests/site.pp": "node default { }\n"},
+		"testing":    {"manifests/site.pp": "node default { }\n"},
+	})
+	if err := s.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Skipped(); len(got) != 0 {
+		t.Errorf("skipped = %v, want empty", got)
+	}
+}
+
+// The list reflects the most recent reseal, so fixing the name clears the report
+// rather than leaving it to accumulate.
+func TestSkippedIsReplacedEachReseal(t *testing.T) {
+	s := basedir(t, map[string]map[string]string{
+		"production": {"manifests/site.pp": "node default { }\n"},
+	})
+	bad := filepath.Join(s.BaseDir, "feature-foo")
+	if err := os.MkdirAll(filepath.Join(bad, "manifests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Skipped()) != 1 {
+		t.Fatalf("skipped = %v, want one entry", s.Skipped())
+	}
+
+	// Rename it to something valid, as an operator would after reading the line.
+	if err := os.Rename(bad, filepath.Join(s.BaseDir, "feature_foo")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Skipped(); len(got) != 0 {
+		t.Errorf("skipped = %v after the name was fixed, want empty", got)
+	}
+	if _, ok := s.Environments()["feature_foo"]; !ok {
+		t.Error("the renamed environment is not being served")
+	}
+}
