@@ -109,6 +109,10 @@ jobs:
       # explores a little further each time, rather than trying to be an
       # exhaustive search. This caught a real crash on two-character entry
       # names, which ordinary control repos contain.
+      #
+      # The exhaustive search is fuzz-nightly.yml, which runs for hours and
+      # carries its corpus between runs. Do not lengthen this one: a slow gate on
+      # every pull request is how fuzzing gets deleted.
       - name: Fuzz ExtractArchive
         run: go test -run '^$' -fuzz FuzzExtractArchive -fuzztime 60s ./internal/seal/
 

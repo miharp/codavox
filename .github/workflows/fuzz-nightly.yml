@@ -1,0 +1,93 @@
+---
+# A long fuzz run, nightly.
+#
+# CI already fuzzes the extractor for 60s on every pull request, which re-checks
+# the seed corpus and explores a little further each time. That is a smoke test:
+# it starts from nothing every run, so it keeps rediscovering the same shallow
+# paths and never reaches the header edge cases that take a coverage-guided
+# fuzzer real time to construct.
+#
+# The target deserves the longer run. Extraction is where codavox parses
+# untrusted bytes, and it happens *before* the code_id can be verified — so the
+# re-seal check that catches tampered content does not protect this parser. A
+# panic here crash-loops the agent on every compiler at once, and fuzzing has
+# already found one: a two-character entry name that ordinary control repos
+# contain.
+name: Fuzz (nightly)
+
+on:
+  schedule:
+    # 03:17 UTC — an odd minute, because the hour and half-hour are when every
+    # other project's cron fires and runners queue.
+    - cron: '17 3 * * *'
+  # So a change to the extractor can be given a long run without waiting a day.
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: 'How long to fuzz, as a Go duration'
+        required: false
+        default: '8h'
+
+permissions:
+  contents: read
+
+env:
+  # Pinned rather than left to the runner default, so the cache path below and
+  # the directory Go actually writes to cannot drift apart. A nightly job that
+  # silently cached the wrong directory would look healthy while starting from
+  # the seeds every night, which is the exact failure this job exists to avoid.
+  GOCACHE: ${{ github.workspace }}/.gocache
+
+jobs:
+  fuzz:
+    name: Fuzz the artifact extractor
+    runs-on: ubuntu-latest
+    # Above the default 6h, and above the longest fuzztime, so the run is ended
+    # by its own timer rather than killed mid-write by the job timeout.
+    timeout-minutes: 560
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+
+      # The corpus is the whole point of running long. Go writes discovered
+      # inputs under GOCACHE/fuzz, and without carrying them between runs each
+      # night would start from the seeds again and re-derive minute one for eight
+      # hours. Restore-keys let today's run build on yesterday's.
+      - name: Restore the fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.gocache/fuzz
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+
+      # Prove the corpus landed where the cache expects, so a path that drifts is
+      # a visible line in the log rather than a silently cold run.
+      - name: Report the corpus carried over
+        run: |
+          dir="$GOCACHE/fuzz"
+          if [ -d "$dir" ]; then
+            echo "corpus entries restored: $(find "$dir" -type f | wc -l)"
+          else
+            echo "no corpus yet — first run, or the cache key missed"
+          fi
+
+      - name: Fuzz ExtractArchive
+        run: |
+          go test -run '^$' -fuzz FuzzExtractArchive \
+            -fuzztime '${{ github.event.inputs.fuzztime || '8h' }}' \
+            ./internal/seal/
+
+      # A crash leaves its input in testdata/fuzz. Keep it: that file is the
+      # reproduction, and it belongs in the repo as a regression seed once the
+      # bug is fixed.
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crashers
+          path: internal/seal/testdata/fuzz/
+          retention-days: 90

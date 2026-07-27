@@ -35,6 +35,7 @@
     "errorlint",
     "FIFOs",
     "firewalld",
+    "fuzztime",
     "gid",
     "gofmt",
     "golangci",
