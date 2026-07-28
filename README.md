@@ -84,13 +84,15 @@ answers them with Code Manager and file sync. A stock OpenVox Server has the
 socket for these answers but nothing plugged into it, so it asks for a version,
 gets nothing back, and the guarantee quietly does nothing.
 
-You can fill that socket yourself, and the obvious way is git: report the commit
-SHA as the version, and serve content with `git show <sha>:<path>`. That holds up
-until a file resource points into a module r10k installed from your Puppetfile,
-which is every Forge module you use and anything you pull from another repo.
-Those files are in no commit of your control repo, so git has nothing to hand
-back. Answering for them means keeping the *resolved* tree r10k built, not the
-repo it was built from.
+You can fill that socket yourself, and Puppet's
+[static catalogs documentation](https://help.puppet.com/core/current/Content/PuppetCore/static-catalogs.htm)
+shows you how: `git rev-parse HEAD` for the version, `git show <code_id>:<path>`
+for the content, both run in the environment directory. That holds up until a
+file resource points into a module r10k installed from your Puppetfile, which is
+every Forge module you use and anything you pull from another repo. Those files
+are not tracked in your control repo, so `git show` has nothing to hand back.
+Answering for them means keeping the *resolved* tree r10k built, not the repo it
+was built from.
 
 One thing that does *not* fill the socket, despite the name: `config_version` in
 `environment.conf`. The standard control repo wires that to a
