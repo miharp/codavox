@@ -60,6 +60,37 @@ Behavior, from `versioned_code_core.clj`:
 - code-content uses `execute-command-streamed`, so file bytes stream rather
   than buffering in the JVM heap. Large files are safe.
 
+## With nothing configured, catalogs quietly stop being static
+
+`current-code-id` returns `nil` when `code-id-command` is unset
+(`versioned_code_service.clj:24-28`). The service announces it once at INFO
+during init (`:17-18`), and never again:
+
+> No code-id-command set for versioned-code-service. Code-id will be nil.
+
+That `nil` reaches the catalog compiler, which gates static compilation on four
+conditions at once (`lib/puppet/indirector/catalog/compiler.rb:310`, in the
+`ruby/puppet` submodule @ `77cc7a49da`, openvox 8.21.0):
+
+```ruby
+if node.environment && node.environment.static_catalogs? && options[:static_catalog] && options[:code_id]
+  checksum_type = common_checksum_type(options[:checksum_type])
+```
+
+`checksum_type` stays `nil` if any one of the four fails, and the compile log
+line is selected from it a few lines down: `Compiled static catalog for ...`
+when it is set, `Compiled catalog for ...` when it is not.
+
+So `static_catalogs` defaulting to `true` is not enough on its own, and the
+downgrade is silent: no error, no per-compile warning, just an ordinary catalog.
+Puppet's own setting description says as much (`lib/puppet/defaults.rb:258`),
+that static catalog compilation "occurs only on Puppet Server when the
+`code-id-command` and `code-content-command` settings are configured".
+
+**The compile log is the check.** `Compiled catalog` means no `code_id` reached
+the compiler, whatever `environment.conf` says. `config_version` is a separate
+setting that labels the catalog and has no bearing on this gate.
+
 ## Validation landmines
 
 Both from `src/clj/puppetlabs/puppetserver/common.clj`:
