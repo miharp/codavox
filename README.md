@@ -1,18 +1,27 @@
 # codavox
 
-**Versioned Puppet code distribution for OpenVox — the open-source answer to
-Puppet Enterprise's Code Manager and file sync.**
+[![CI](https://github.com/miharp/codavox/actions/workflows/ci.yml/badge.svg)](https://github.com/miharp/codavox/actions/workflows/ci.yml)
+[![Integration](https://github.com/miharp/codavox/actions/workflows/integration.yml/badge.svg)](https://github.com/miharp/codavox/actions/workflows/integration.yml)
+[![Release](https://img.shields.io/github/v/release/miharp/codavox?include_prereleases&sort=semver)](https://github.com/miharp/codavox/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-codavox gets your Puppet code onto OpenVox compilers and lets every compiler
-report exactly which version it is serving. You deploy from your control repo
-the way you already do; codavox makes sure every compiler ends up serving
-identical, fully resolved code — and can prove which version that is.
+**Code Manager and file sync for open-source OpenVox — versioned Puppet code
+distribution, and static catalogs that actually work.**
+
+codavox gets your Puppet code onto every node that compiles catalogs, and lets
+each one report exactly which version it is serving. You deploy from your
+control repo the way you already do; codavox makes sure every one of those nodes
+ends up serving identical, fully resolved code — and can prove which version
+that is. That holds for fifty compilers, and for a
+[single OpenVox Server](docs/production.md#a-primary-that-compiles-its-own-catalogs),
+where it is the only correct route to static catalogs at all.
 
 **Status: early development.** The whole chain works and is exercised on every
-push against real OpenVox Server processes: a deploy runs r10k and distributes
-the result, a compiler that missed a deploy catches up on its own, an agent
-receives a catalog stamped with the exact code version, and revoking a
-compiler's certificate cuts off its access to code.
+push to `main` against real OpenVox Server processes: a deploy runs r10k and
+distributes the result, a compiler that missed a deploy catches up on its own,
+an agent receives a catalog stamped with the exact code version, and revoking a
+compiler's certificate cuts off its access to code. The one place untrusted
+bytes are parsed — unpacking a downloaded artifact — is fuzzed nightly.
 
 It ships as rpm and deb for `linux/amd64` and `linux/arm64`, with systemd units
 and a Puppet module ([miharp/puppet-codavox](https://github.com/miharp/puppet-codavox))
