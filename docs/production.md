@@ -187,9 +187,15 @@ For one 37 MB environment at the default `keep: 3`, that is 37 MB of basedir plu
 a 7.1 MB artifact plus four unpacked versions — about 190 MB, against 150 MB for
 a compiler that stores no artifacts.
 
-Being its own client, the node also has to authorize itself: its own `pp_role`
-or certname must appear in the allowlist below, or the publisher refuses the
-agent it is hosting.
+The node does **not** have to authorize itself. The publisher always admits its
+own certname, because that node already holds the basedir in plaintext on local
+disk — admitting it grants nothing, and requiring it to be written down would
+only be a step to forget. The allowlist below names the compilers you add later.
+
+It still has to name *something*: a publisher with an empty allowlist is refused
+at startup rather than coming up serving nobody. On a node that will never have
+compilers, `allow_roles: ['openvox_compiler']` satisfies that and authorizes no
+one, which is the accurate description of the estate.
 
 ## Authorizing compilers
 
