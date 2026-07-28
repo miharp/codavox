@@ -24,9 +24,9 @@ on:
   workflow_dispatch:
     inputs:
       fuzztime:
-        description: 'How long to fuzz, as a Go duration'
+        description: 'How long to fuzz, as a Go duration (must stay under 6h)'
         required: false
-        default: '8h'
+        default: '5h'
 
 permissions:
   contents: read
@@ -42,9 +42,12 @@ jobs:
   fuzz:
     name: Fuzz the artifact extractor
     runs-on: ubuntu-latest
-    # Above the default 6h, and above the longest fuzztime, so the run is ended
-    # by its own timer rather than killed mid-write by the job timeout.
-    timeout-minutes: 560
+    # GitHub-hosted runners cap job execution at 6 hours, and that cap wins over
+    # anything set here. The first scheduled run asked for 8h and was cancelled at
+    # 6h00m31s — and a cancelled job skips its post steps, so the whole night's
+    # corpus was discarded rather than saved. fuzztime stays comfortably under the
+    # cap so the fuzzer stops on its own timer and the save step gets to run.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v7
 
@@ -57,12 +60,12 @@ jobs:
       # night would start from the seeds again and re-derive minute one for eight
       # hours. Restore-keys let today's run build on yesterday's.
       - name: Restore the fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.gocache/fuzz
-          key: fuzz-corpus-${{ github.run_id }}
           restore-keys: |
             fuzz-corpus-
+          key: fuzz-corpus-${{ github.run_id }}
 
       # Prove the corpus landed where the cache expects, so a path that drifts is
       # a visible line in the log rather than a silently cold run.
@@ -78,8 +81,18 @@ jobs:
       - name: Fuzz ExtractArchive
         run: |
           go test -run '^$' -fuzz FuzzExtractArchive \
-            -fuzztime '${{ github.event.inputs.fuzztime || '8h' }}' \
+            -fuzztime '${{ github.event.inputs.fuzztime || '5h' }}' \
             ./internal/seal/
+
+      # Split from the restore, and always: a run that ends by finding a crash is
+      # exactly the run whose corpus is most worth keeping, and the combined cache
+      # action's implicit post step would not save it.
+      - name: Save the fuzz corpus
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.gocache/fuzz
+          key: fuzz-corpus-${{ github.run_id }}
 
       # A crash leaves its input in testdata/fuzz. Keep it: that file is the
       # reproduction, and it belongs in the repo as a regression seed once the
