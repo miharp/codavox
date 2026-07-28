@@ -194,6 +194,13 @@ Wiring OpenVox Server at codavox — its `versioned-code.conf` and
 [installation.md](docs/installation.md), which covers the safe order and how to
 canary one compiler first.
 
+**Running a single OpenVox Server?** Same setup, one node: run the publisher and
+the agent there, with the agent pointed at the node's own certname. Outside PE it
+is the only correct way to get static catalogs at all — `static_catalogs` already
+defaults to true, but does nothing without a `code_id_command`. See [A single
+OpenVox Server](docs/production.md#a-single-openvox-server), which also covers
+why the cutover needs *more* care on one node, not less.
+
 For push-to-deploy and CI, run `codavox deploy-server` on the primary: a push
 webhook and a token-authenticated deploy API with status and history, the way
 Code Manager's webhook and API work. Settings shared across these commands —
