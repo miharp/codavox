@@ -170,12 +170,14 @@ The package installs `/usr/bin/codavox` and the symlinks OpenVox Server invokes;
 see [installation.md](docs/installation.md). To build from source instead, see
 [Development](#development).
 
-**Managing more than one node?** Use the
+**Running this in production, or on more than one node?** Use the
 [miharp/puppet-codavox](https://github.com/miharp/puppet-codavox) module rather
 than doing the Quickstart below by hand. Its `codavox::primary` class also removes
 the one ordering hazard for you: it waits for the `codavox_environments` fact to
 report the environment converged before it wires `environmentpath`, which is the
-step you cannot safely get wrong on a node that compiles its own catalogs.
+step you cannot safely get wrong on a node that compiles its own catalogs. Then
+read [production.md](docs/production.md) for ports, sizing, failure modes, and
+what to monitor.
 
 ## Quickstart
 
