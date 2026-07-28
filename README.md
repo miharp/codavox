@@ -101,7 +101,9 @@ that labels each catalog with a git SHA, but a label is not a content pin, and
 nothing pairs with it to serve file bytes at that version. Its last resort is
 `date +%s`, which is harmless for a label and fatal as a `code_id`: a timestamp
 names a version nothing can serve, and every compiler computes a different one.
-If you already set `config_version`, you have not yet turned static catalogs on.
+The compile log tells you where you stand: while `code_id` is nil the server
+logs `Compiled catalog for ...`, and it logs `Compiled static catalog for ...`
+only once a `code-id-command` is answering.
 
 **codavox is what plugs in.** It distributes that resolved tree and answers both
 questions (`code-id` and `code-content`) the same way on every compiler, and
