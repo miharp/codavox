@@ -268,15 +268,26 @@ Code Manager's webhook and API work. Settings shared across these commands
 - **Deploys are atomic.** A compiler serves the old version or the new one,
   never a half-written tree.
 
-## Why not webhooks, NFS, or rsync?
+## Why not r10k per compiler, webhooks, NFS, or rsync?
 
-The usual ways to get code onto compilers each give something up: webhooks are
-fire-and-forget, so a compiler that was down misses the deploy for good; NFS
-makes catalog compilation itself depend on one fileserver, with no atomicity;
-rsync is neither atomic nor versioned. And none of them can answer "which exact
-version is this compiler serving?", so divergence cannot even be detected.
-codavox distributes versioned, content-addressed code and answers that question
-by design. See [design.md](docs/design.md) for the full rationale.
+The most obvious alternative is not a transport at all: skip central
+distribution and run r10k independently on every compiler. That fails for a
+reason none of the others share. **r10k is not deterministic across time.** A
+Puppetfile with `:latest`, or any branch ref, can resolve differently between
+two runs, so two compilers running r10k an hour apart can produce different
+code from the same control-repo commit. No amount of triggering it well fixes
+that; the code has already diverged before distribution enters the picture.
+That is why codavox distributes the resolved tree r10k produces, rather than
+re-running r10k per compiler.
+
+The usual ways to move that tree around each give something up too: webhooks
+are fire-and-forget, so a compiler that was down misses the deploy for good;
+NFS makes catalog compilation itself depend on one fileserver, with no
+atomicity; rsync is neither atomic nor versioned. And none of the four can
+answer "which exact version is this compiler serving?", so divergence cannot
+even be detected. codavox distributes versioned, content-addressed code and
+answers that question by design. See [design.md](docs/design.md#the-trap-that-kills-the-obvious-design)
+for the full rationale.
 
 ## Documentation
 
