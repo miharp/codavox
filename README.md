@@ -107,7 +107,9 @@ only once a `code-id-command` is answering.
 
 **codavox is what plugs in.** It distributes that resolved tree and answers both
 questions (`code-id` and `code-content`) the same way on every compiler, and
-never falls back to a wrong version.
+never falls back to a wrong version. For the longer version of this story, and
+the settings that look like they turn static catalogs on but do not, see
+[static-catalogs.md](docs/static-catalogs.md).
 
 ## How a deploy flows
 
@@ -286,6 +288,7 @@ by design. See [design.md](docs/design.md) for the full rationale.
 | [deploy-server.md](docs/deploy-server.md) | The deploy API and push webhook; deploy status and history |
 | [publishing.md](docs/publishing.md) | Running the publisher and its mutual TLS |
 | [agent.md](docs/agent.md) | The compiler-side agent: verification, atomic swap, cleanup |
+| [static-catalogs.md](docs/static-catalogs.md) | What static catalogs are, the four settings people confuse, and how to check |
 | [sealing.md](docs/sealing.md) | How a `code_id` is derived from a tree, and what is excluded |
 | [commands.md](docs/commands.md) | Command reference, exit codes, and OpenVox Server wiring |
 | [performance.md](docs/performance.md) | Per-deploy benchmarks and the acceptance timing harness |
