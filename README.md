@@ -14,7 +14,8 @@ control repo the way you already do; codavox makes sure every one of those nodes
 ends up serving identical, fully resolved code — and can prove which version
 that is. That holds for fifty compilers, and for a
 [single OpenVox Server](docs/production.md#a-primary-that-compiles-its-own-catalogs),
-where it is the only correct route to static catalogs at all.
+where static catalogs stay inert until something answers for the code version —
+OpenVox ships the hook, but nothing that fills it.
 
 **Status: early development.** The whole chain works and is exercised on every
 push to `main` against real OpenVox Server processes: a deploy runs r10k and
@@ -207,9 +208,9 @@ canary one compiler first.
 least one catalog — its own — so it wants versioned code for the same reason a
 compiler does. Point its agent at its own certname and it becomes a client of its
 own publisher. That is also the whole setup for an estate with a single OpenVox
-Server, where outside PE it is the only correct way to get static catalogs at all:
-`static_catalogs` already defaults to true but does nothing without a
-`code_id_command`. See [A primary that compiles its own
+Server, where nothing else is going to fill the hook for you: `static_catalogs`
+already defaults to true but does nothing until a `code-id-command` and a
+`code-content-command` are wired up. See [A primary that compiles its own
 catalogs](docs/production.md#a-primary-that-compiles-its-own-catalogs), which
 covers why the cutover needs *more* care on such a node, not less.
 

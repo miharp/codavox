@@ -137,10 +137,22 @@ So the same node runs both halves and is a client of its own publisher. This is
 estate has compilers, and adding one later is purely additive: point the new
 compiler at the same publisher and nothing here changes.
 
-For an estate with a single OpenVox Server it is also the only correct route to
-static catalogs at all: `static_catalogs` already defaults to true, but does
-nothing without a `code_id_command`, and a hand-written one has no way to answer
-`code-content` for a version it no longer has.
+For an estate with a single OpenVox Server this is also what makes static
+catalogs work at all. `static_catalogs` already defaults to true, but stays
+inert until a `code-id-command` and a `code-content-command` are wired up, and
+open-source OpenVox Server ships neither — only the hook they plug into.
+
+You can supply that pair yourself; the contract is small, and a shell script
+meets the latency budget (see
+[versioned-code-contract.md](versioned-code-contract.md)). The two parts a
+hand-rolled pair usually gets wrong are the ones codavox exists for. First,
+**Puppetfile content**: most `puppet:///modules/...` sources point into modules
+r10k installed, which are in no commit of your control repo, so a
+`code-content-command` backed by `git show <sha>:<path>` cannot serve them.
+Answering requires the *resolved* tree. Second, **retention**: superseded
+versions have to stay readable until in-flight agent runs finish with them, so a
+script that reads the live environment directory serves whatever is current —
+the precise silent mismatch static catalogs exist to prevent.
 
 ```text
   PRIMARY (also the compiler)
