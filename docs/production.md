@@ -125,14 +125,22 @@ only needed if you deploy by API or webhook rather than by running
 **Firewall rule to add:** compilers → primary on `8150/tcp`. That is the whole
 list.
 
-### A single OpenVox Server
+### A primary that compiles its own catalogs
 
-Most estates run one server. That is a supported topology, and the only correct
-route to static catalogs on it: `static_catalogs` already defaults to true, but
-it does nothing without a `code_id_command`, and a hand-written one has no way to
-answer `code-content` for a version it no longer has.
+Everything above assumes the publisher and the compilers are different machines.
+They need not be, and usually should not be: any node that compiles catalogs
+benefits from serving versioned ones, and that includes the primary. A primary
+that manages itself is compiling at least one catalog — its own.
 
-The same node runs both halves, and is a client of its own publisher:
+So the same node runs both halves and is a client of its own publisher. This is
+**not a separate topology**. It is how a primary is set up whether or not the
+estate has compilers, and adding one later is purely additive: point the new
+compiler at the same publisher and nothing here changes.
+
+For an estate with a single OpenVox Server it is also the only correct route to
+static catalogs at all: `static_catalogs` already defaults to true, but does
+nothing without a `code_id_command`, and a hand-written one has no way to answer
+`code-content` for a version it no longer has.
 
 ```text
   PRIMARY (also the compiler)
@@ -159,30 +167,35 @@ The same node runs both halves, and is a client of its own publisher:
 
 Nothing about the mechanism changes. The node polls itself, verifies the artifact
 by resealing it, and swaps its own environment symlink, so a `code_id` in a
-catalog means what it means on any compiler — and adding real compilers later
-changes nothing on this node. Point them at the same publisher.
+catalog means what it means on any compiler.
+
+The one behavioral difference to expect: the primary's own catalogs now converge
+on the agent's poll interval rather than the instant r10k finishes, exactly like
+every other node. That is the point — the primary stops being the one machine
+serving code no `code_id` describes.
 
 The publisher must still be addressed by **certname**, not `localhost`: it
 presents this node's Puppet certificate, and `localhost` does not verify against
 it.
 
-Two things are different, and both cut against the intuition that one node is
-the easier case.
+Two things cost more here than on a compiler.
 
-**The cutover is riskier here, not safer.** Pointing `environmentpath` at a
-directory the agent has not filled yet stops catalog compilation. On a compiler
-that is recoverable — the primary still compiles, and the next agent run repairs
-it. On a single node the agent that would apply the fix needs a catalog from the
-server it just broke, so the repair is an SSH session. Either use
-[`codavox::standalone`](https://github.com/miharp/puppet-codavox), which waits
-for the `codavox_environments` fact to report the environment converged before
-wiring anything, or do it in two passes by hand: install and start the agent
-first, confirm `codavox code-id production` answers, and only then set
+**The cutover is riskier, not safer.** Pointing `environmentpath` at a directory
+the agent has not filled yet stops catalog compilation. On a compiler that is
+recoverable — the primary still compiles, and the next agent run repairs it. On a
+node compiling its own catalog the agent that would apply the fix needs a catalog
+from the server it just broke, so the repair is an SSH session. That holds
+whether or not the estate has compilers: a self-managing node cannot Puppet its
+way out of it. Either use
+[`codavox::primary`](https://github.com/miharp/puppet-codavox), which waits for
+the `codavox_environments` fact to report the environment converged before wiring
+anything, or do it in two passes by hand: install and start the agent first,
+confirm `codavox code-id production` answers, and only then set
 `environmentpath`.
 
 **Disk roughly doubles.** The [Sizing](#sizing) table splits publisher and
-compiler storage across rows because they are usually different machines. Here
-they land on the same disk, on top of r10k's basedir, which was already there.
+compiler storage across rows because they are often different machines. Here they
+land on the same disk, on top of r10k's basedir, which was already there.
 For one 37 MB environment at the default `keep: 3`, that is 37 MB of basedir plus
 a 7.1 MB artifact plus four unpacked versions — about 190 MB, against 150 MB for
 a compiler that stores no artifacts.
@@ -255,9 +268,9 @@ compresses comparably; scale from your own control repo's size.
 | Publisher | provenance log, one line per seal | a few hundred bytes per deploy, forever |
 | Compiler | the current version plus `keep` superseded ones, per environment | `tree size × (keep + 1) × environments` |
 
-The rows are per *role*, not per machine. On [a single OpenVox
-Server](#a-single-openvox-server) both roles are the same node, so add them
-together — and note that r10k's basedir is on that disk too.
+The rows are per *role*, not per machine. On [a primary that compiles its own
+catalogs](#a-primary-that-compiles-its-own-catalogs) both roles are the same
+node, so add them together — and note that r10k's basedir is on that disk too.
 
 The compiler side is what to plan for, and it is **unpacked**, not compressed.
 `keep` counts *superseded* versions; the current one is always retained on top
