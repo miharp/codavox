@@ -49,6 +49,17 @@ So bring a compiler online in this order:
 It is reversible: [remove the package](#upgrading-and-removing) and revert those
 two settings, and the compiler is back to stock.
 
+**On a node that compiles its own catalogs, step 3 is riskier, not safer.** That
+includes a lone OpenVox Server and a primary that manages itself. Wire it before
+the agent has converged and the node cannot repair itself, because the agent that
+would apply the fix needs a catalog from the server it just broke — so the repair
+is an SSH session rather than the next Puppet run. Either confirm `codavox code-id
+production` answers before touching `environmentpath`, or use
+[`codavox::primary`](https://github.com/miharp/puppet-codavox), which reads a fact
+and holds the wiring back until the environment has actually converged. See
+[A primary that compiles its own
+catalogs](production.md#a-primary-that-compiles-its-own-catalogs).
+
 ## Install
 
 Download the package for your platform from the
