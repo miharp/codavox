@@ -92,6 +92,15 @@ Those files are in no commit of your control repo, so git has nothing to hand
 back. Answering for them means keeping the *resolved* tree r10k built, not the
 repo it was built from.
 
+One thing that does *not* fill the socket, despite the name: `config_version` in
+`environment.conf`. The standard control repo wires that to a
+[script](https://github.com/puppetlabs/control-repo/blob/production/scripts/config_version.sh)
+that labels each catalog with a git SHA, but a label is not a content pin, and
+nothing pairs with it to serve file bytes at that version. Its last resort is
+`date +%s`, which is harmless for a label and fatal as a `code_id`: a timestamp
+names a version nothing can serve, and every compiler computes a different one.
+If you already set `config_version`, you have not yet turned static catalogs on.
+
 **codavox is what plugs in.** It distributes that resolved tree and answers both
 questions (`code-id` and `code-content`) the same way on every compiler, and
 never falls back to a wrong version.
