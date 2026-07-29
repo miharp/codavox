@@ -54,62 +54,27 @@ replay and no way to silently miss one.
   a branch of your control repo. As everywhere in Puppet.
 - **Static catalog**: a Puppet feature that keeps an agent's file content
   matched to the catalog it was compiled against, even if the code changes
-  mid-run. See [Static catalogs in plain terms](#static-catalogs-in-plain-terms).
+  mid-run. See [static-catalogs.md](docs/static-catalogs.md).
 - **`code_id`**: the identifier for that exact version. In codavox it is a
   content hash of the fully resolved code, so identical code always has the same
   `code_id`, on every compiler.
 - **Publisher and agent**: the publisher runs on your primary and serves
   versioned code; the agent runs on each compiler and pulls it.
 
-## Static catalogs in plain terms
+## Static catalogs
 
-Puppet configures a node from a **catalog**, the full list of what that node
-should have: packages, services, files, and so on. Much of a catalog is files
-copied from your modules, and the agent fetches those file contents from the
-server as it works through the catalog.
+A **static catalog** pins the file content an agent fetches mid-run to the exact
+code version its catalog was compiled against, so a deploy landing while an
+agent is running cannot hand it a mix of old and new files. OpenVox Server ships
+the hook for this but nothing plugged into it, so out of the box the guarantee
+silently does nothing.
 
-An agent run takes time. If you deploy new code *while* a run is in progress,
-the agent can fetch the new version of a file partway through and apply a mix
-of old and new: a silent, hard-to-debug inconsistency.
-
-A **static catalog** prevents that. When the catalog is compiled, the server
-stamps it with a version (the `code_id`) and the checksums of the module files
-it uses. For the rest of that run the agent asks for files *at that version*, so
-it always gets the set that matches the catalog it was handed, even if you
-deploy in the middle. (It covers module file *content*, not the whole catalog.)
-
-For this to work, the server has to answer two questions on demand: **which
-version is current?** and **give me file X at version Y.** Puppet Enterprise
-answers them with Code Manager and file sync. A stock OpenVox Server has the
-socket for these answers but nothing plugged into it, so it asks for a version,
-gets nothing back, and the guarantee quietly does nothing.
-
-You can fill that socket yourself, and Puppet's
-[static catalogs documentation](https://help.puppet.com/core/current/Content/PuppetCore/static-catalogs.htm)
-shows you how: `git rev-parse HEAD` for the version, `git show <code_id>:<path>`
-for the content, both run in the environment directory. That holds up until a
-file resource points into a module r10k installed from your Puppetfile, which is
-every Forge module you use and anything you pull from another repo. Those files
-are not tracked in your control repo, so `git show` has nothing to hand back.
-Answering for them means keeping the *resolved* tree r10k built, not the repo it
-was built from.
-
-One thing that does *not* fill the socket, despite the name: `config_version` in
-`environment.conf`. The standard control repo wires that to a
-[script](https://github.com/puppetlabs/control-repo/blob/production/scripts/config_version.sh)
-that labels each catalog with a git SHA, but a label is not a content pin, and
-nothing pairs with it to serve file bytes at that version. Its last resort is
-`date +%s`, which is harmless for a label and fatal as a `code_id`: a timestamp
-names a version nothing can serve, and every compiler computes a different one.
-The compile log tells you where you stand: while `code_id` is nil the server
-logs `Compiled catalog for ...`, and it logs `Compiled static catalog for ...`
-only once a `code-id-command` is answering.
-
-**codavox is what plugs in.** It distributes that resolved tree and answers both
-questions (`code-id` and `code-content`) the same way on every compiler, and
-never falls back to a wrong version. For the longer version of this story, and
-the settings that look like they turn static catalogs on but do not, see
-[static-catalogs.md](docs/static-catalogs.md).
+**codavox is what plugs in.** It distributes the *resolved* tree r10k built and
+answers both of the server's two questions (`code-id` and `code-content`) the
+same way on every compiler, and never falls back to a wrong version. See
+[static-catalogs.md](docs/static-catalogs.md) for what static catalogs actually
+need, the settings that look like they enable them and do not, and how to check
+whether any of this is working on your servers.
 
 ## How a deploy flows
 
