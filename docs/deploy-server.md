@@ -52,9 +52,10 @@ final record.
 $ curl -H 'Authorization: Bearer <token>' \
     -d '{"environments":["production"],"wait":true}' \
     https://primary:8170/v1/deploys
-{ "id": "e210f6…", "status": "complete", "source": "api",
+{ "id": "ff293253a703830c1c1d164cae5ba650", "status": "complete", "source": "api",
   "environments": ["production"],
-  "results": [ { "environment": "production", "code_id": "778ae2…",
+  "results": [ { "environment": "production",
+                 "code_id": "a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed",
                  "commit": "cafe123" } ] }
 ```
 
