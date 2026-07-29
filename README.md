@@ -169,6 +169,10 @@ what to monitor.
 
 ## Quickstart
 
+This is the manual path: every command run by hand, so you can see how the
+pieces fit or try codavox on a single test node. For production, or more than
+one node, use the module in [Install](#install) instead.
+
 Put the `codavox` binary on your primary and each compiler. Then, on the
 primary, run the publisher and deploy. The deploy command is the one you know
 from `puppet-code`:
@@ -206,11 +210,9 @@ canary one compiler first.
 
 **Run the agent on the primary too.** A primary that manages itself compiles at
 least one catalog (its own), so it wants versioned code for the same reason a
-compiler does. Point its agent at its own certname and it becomes a client of its
-own publisher. That is also the whole setup for an estate with a single OpenVox
-Server, where nothing else is going to fill the hook for you: `static_catalogs`
-already defaults to true but does nothing until a `code-id-command` and a
-`code-content-command` are wired up. See [A primary that compiles its own
+compiler does. Point its agent at its own certname and it becomes a client of
+its own publisher: the whole setup for an estate with a single OpenVox Server.
+See [A primary that compiles its own
 catalogs](docs/production.md#a-primary-that-compiles-its-own-catalogs), which
 covers why the cutover needs *more* care on such a node, not less.
 
