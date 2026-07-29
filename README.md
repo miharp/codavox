@@ -84,32 +84,15 @@ answers them with Code Manager and file sync. A stock OpenVox Server has the
 socket for these answers but nothing plugged into it, so it asks for a version,
 gets nothing back, and the guarantee quietly does nothing.
 
-You can fill that socket yourself, and Puppet's
-[static catalogs documentation](https://help.puppet.com/core/current/Content/PuppetCore/static-catalogs.htm)
-shows you how: `git rev-parse HEAD` for the version, `git show <code_id>:<path>`
-for the content, both run in the environment directory. That holds up until a
-file resource points into a module r10k installed from your Puppetfile, which is
-every Forge module you use and anything you pull from another repo. Those files
-are not tracked in your control repo, so `git show` has nothing to hand back.
-Answering for them means keeping the *resolved* tree r10k built, not the repo it
-was built from.
-
-One thing that does *not* fill the socket, despite the name: `config_version` in
-`environment.conf`. The standard control repo wires that to a
-[script](https://github.com/puppetlabs/control-repo/blob/production/scripts/config_version.sh)
-that labels each catalog with a git SHA, but a label is not a content pin, and
-nothing pairs with it to serve file bytes at that version. Its last resort is
-`date +%s`, which is harmless for a label and fatal as a `code_id`: a timestamp
-names a version nothing can serve, and every compiler computes a different one.
-The compile log tells you where you stand: while `code_id` is nil the server
-logs `Compiled catalog for ...`, and it logs `Compiled static catalog for ...`
-only once a `code-id-command` is answering.
-
-**codavox is what plugs in.** It distributes that resolved tree and answers both
-questions (`code-id` and `code-content`) the same way on every compiler, and
-never falls back to a wrong version. For the longer version of this story, and
-the settings that look like they turn static catalogs on but do not, see
-[static-catalogs.md](docs/static-catalogs.md).
+**codavox is what plugs in.** It distributes the *resolved* tree r10k built and
+answers both questions (`code-id` and `code-content`) the same way on every
+compiler, and never falls back to a wrong version. You can fill that socket
+yourself with git, and Puppet's own documentation shows how, but a settings file
+called `config_version` looks like it already does this and does not, and a
+git-based script is only correct if it fails loudly on a module file r10k
+installed from your Puppetfile. See [static-catalogs.md](docs/static-catalogs.md)
+for the DIY approach, the settings people confuse, and the one-line check for
+whether any of this is actually working.
 
 ## How a deploy flows
 
