@@ -113,5 +113,4 @@ resolved tree is what makes `code-content` answer for every file in the catalog,
 which is what static catalogs need to actually hold.
 
 See [design.md](design.md) for why resolved trees, not Puppetfiles, are the unit
-of distribution, and the [README](../README.md#static-catalogs-in-plain-terms)
-for the shorter version of this story.
+of distribution.

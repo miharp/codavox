@@ -54,45 +54,27 @@ replay and no way to silently miss one.
   a branch of your control repo. As everywhere in Puppet.
 - **Static catalog**: a Puppet feature that keeps an agent's file content
   matched to the catalog it was compiled against, even if the code changes
-  mid-run. See [Static catalogs in plain terms](#static-catalogs-in-plain-terms).
+  mid-run. See [static-catalogs.md](docs/static-catalogs.md).
 - **`code_id`**: the identifier for that exact version. In codavox it is a
   content hash of the fully resolved code, so identical code always has the same
   `code_id`, on every compiler.
 - **Publisher and agent**: the publisher runs on your primary and serves
   versioned code; the agent runs on each compiler and pulls it.
 
-## Static catalogs in plain terms
+## Static catalogs
 
-Puppet configures a node from a **catalog**, the full list of what that node
-should have: packages, services, files, and so on. Much of a catalog is files
-copied from your modules, and the agent fetches those file contents from the
-server as it works through the catalog.
-
-An agent run takes time. If you deploy new code *while* a run is in progress,
-the agent can fetch the new version of a file partway through and apply a mix
-of old and new: a silent, hard-to-debug inconsistency.
-
-A **static catalog** prevents that. When the catalog is compiled, the server
-stamps it with a version (the `code_id`) and the checksums of the module files
-it uses. For the rest of that run the agent asks for files *at that version*, so
-it always gets the set that matches the catalog it was handed, even if you
-deploy in the middle. (It covers module file *content*, not the whole catalog.)
-
-For this to work, the server has to answer two questions on demand: **which
-version is current?** and **give me file X at version Y.** Puppet Enterprise
-answers them with Code Manager and file sync. A stock OpenVox Server has the
-socket for these answers but nothing plugged into it, so it asks for a version,
-gets nothing back, and the guarantee quietly does nothing.
+A **static catalog** pins the file content an agent fetches mid-run to the exact
+code version its catalog was compiled against, so a deploy landing while an
+agent is running cannot hand it a mix of old and new files. OpenVox Server ships
+the hook for this but nothing plugged into it, so out of the box the guarantee
+silently does nothing.
 
 **codavox is what plugs in.** It distributes the *resolved* tree r10k built and
-answers both questions (`code-id` and `code-content`) the same way on every
-compiler, and never falls back to a wrong version. You can fill that socket
-yourself with git, and Puppet's own documentation shows how, but a settings file
-called `config_version` looks like it already does this and does not, and a
-git-based script is only correct if it fails loudly on a module file r10k
-installed from your Puppetfile. See [static-catalogs.md](docs/static-catalogs.md)
-for the DIY approach, the settings people confuse, and the one-line check for
-whether any of this is actually working.
+answers both of the server's two questions (`code-id` and `code-content`) the
+same way on every compiler, and never falls back to a wrong version. See
+[static-catalogs.md](docs/static-catalogs.md) for what static catalogs actually
+need, the settings that look like they enable them and do not, and how to check
+whether any of this is working on your servers.
 
 ## How a deploy flows
 
