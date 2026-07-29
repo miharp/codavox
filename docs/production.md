@@ -491,7 +491,7 @@ $ r10k deploy environment -v -p
 INFO -> Removing unmanaged path /etc/puppetlabs/code/environments/testing
 
 $ curl .../v1/environments
-{"production":"835b1663c475…"}
+{"production":"835b1663c47534367242ba7616c5c60369bc25ced2dcb5b92808d31b58ef217a"}
 ```
 
 **That does not remove it from any compiler.** Every compiler keeps the

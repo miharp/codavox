@@ -44,7 +44,7 @@ invocation, no directory walk, no lock, no JSON parsing.
 
 ```console
 $ codavox code-id production
-a3f1c9e4b2d8
+a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed
 ```
 
 **It never invents a value.** If the environment link is missing, is a real
@@ -69,7 +69,7 @@ Streams the contents of a file **as of a specific deployed code version** to
 stdout. OpenVox Server runs this for each `static_file_content` request.
 
 ```console
-$ codavox code-content production a3f1c9e4b2d8 manifests/site.pp
+$ codavox code-content production a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed manifests/site.pp
 node default { }
 ```
 
@@ -106,8 +106,8 @@ tree**. That last case matters: without it, a symlink inside a deployed tree
 would become an arbitrary file read on every compiler.
 
 ```console
-$ codavox code-content production a3f1c9e4b2d8 ../../../../etc/passwd
-codavox: opening "../../../../etc/passwd" in a3f1c9e4b2d8: openat ../../../../etc/passwd: path escapes from parent
+$ codavox code-content production a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed ../../../../etc/passwd
+codavox: opening "../../../../etc/passwd" in a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed: openat ../../../../etc/passwd: path escapes from parent
 ```
 
 ---
@@ -207,7 +207,7 @@ be compared exactly — plus the fetch history and counters the table leaves out
     "polls": 240,
     "fetches": 3,
     "commits": {
-      "production": "a3f1c9e4b2d8f70e"
+      "production": "addb2d6b638117234da99bc97c18bc8a0f069dfe"
     }
   }
 ]
@@ -249,7 +249,7 @@ publisher's local provenance log. **Run it on the publisher** — it reads
 
 ```console
 $ codavox provenance production 3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb
-a3f1c9e4b2d8    deployed 2026-07-24 12:00:00 -0400    sealed 2026-07-24T16:00:00Z
+5f2e9c19eb03db14be61df036f5b2af3e377f290    deployed 2026-07-24 12:00:00 -0400    sealed 2026-07-24T16:00:00Z
 ```
 
 The usual troubleshooting path: read a puzzling compiler's version with

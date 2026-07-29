@@ -183,7 +183,7 @@ $ codavox publish --basedir /etc/puppetlabs/code/environments
 
 # deploy: runs r10k, packages the result, and serves it, waiting until it is live
 $ codavox deploy production --wait --basedir /etc/puppetlabs/code/environments
-production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
+production    deployed    a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed    (commit 5f2e9c1)    serving
 ```
 
 On each compiler, run the agent to pull that code, then wire OpenVox Server to
@@ -196,8 +196,12 @@ $ codavox agent --publisher https://puppet.example.com:8150
 
 # what version is this compiler serving right now?
 $ codavox code-id production
-a3f1c9e4b2d8
+a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed
 ```
+
+`code_id` is a full sha256 digest, not the short form `codavox compilers`
+prints in its table above. The compiler needs the whole thing to look
+anything up by it.
 
 Wiring OpenVox Server at codavox (its `versioned-code.conf` and
 `environmentpath`) is a one-time step per compiler. See

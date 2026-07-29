@@ -308,7 +308,7 @@ as fatal — one badly named directory in the basedir should not stop every othe
 environment from being published — and it is named once per reseal:
 
 ```text
-sealed production 23679b617bba…
+sealed production a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed
 skipped feature-my-branch: not a valid environment name (letters, digits and _ only); OpenVox Server will not load it either
 ```
 

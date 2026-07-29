@@ -6,7 +6,7 @@ primary. It is the familiar `puppet-code deploy` verb, for OpenVox Server.
 
 ```console
 $ codavox deploy production --basedir /etc/puppetlabs/code/environments
-production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)
+production    deployed    a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed    (commit 5f2e9c1)
 ```
 
 Run it on the primary, next to the publisher.
@@ -53,7 +53,7 @@ each new `code_id`, then reports `serving`:
 
 ```console
 $ codavox deploy production --wait --basedir /etc/puppetlabs/code/environments
-production    deployed    a3f1c9e4b2d8    (commit 5f2e9c1)    serving
+production    deployed    a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed    (commit 5f2e9c1)    serving
 ```
 
 This is primary-side completion: the new version is sealed and servable. It does
@@ -78,7 +78,7 @@ will ever see it:
 
 ```console
 $ codavox deploy production
-production   deployed   de85ed717e0a…   (commit 4786bf9)
+production   deployed   de85ed717e0a2a01c1a8ba1a1f036d7ce386ed953696fa57331c2ac48a80b255   (commit 4786bf9)
 codavox: deployed to the basedir but nothing is serving it: no running publisher (no pidfile)
 $ echo $?
 1
