@@ -87,6 +87,17 @@ func New(cfg Config) (*Agent, error) {
 // outage degrades to "no new deploys" rather than "no catalogs" — which is the
 // property that makes this better than a shared filesystem.
 func (a *Agent) Run(ctx context.Context) error {
+	// The first poll is jittered too, by the same amount used between polls.
+	// Without this, a fleet restarted together — a package upgrade, a reboot —
+	// makes every agent's very first request land in the same instant: the
+	// one poll the steady-state jitter below cannot reach, since it only takes
+	// effect after this call returns.
+	initial := rand.N(a.cfg.Interval / 4) //nolint:gosec // jitter, not a secret
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(initial):
+	}
 	a.reportSync(a.Once(ctx))
 
 	for {
