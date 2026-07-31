@@ -130,6 +130,22 @@ comfortably exceed your longest agent run.
 
 The current version is never reaped, regardless of age or count.
 
+### Extractions abandoned by a crash
+
+A crash mid-download — a `SIGKILL`, an OOM kill, a power loss — never runs
+`download`'s deferred cleanup, so its dot-prefixed extraction directory is left
+on disk exactly as it was.
+
+Reaping a version and reaping one of these are different problems. A live
+extraction in another process looks identical to an abandoned one, so it can
+never be touched on sight — pulling a directory out from under a live
+extraction would be worse than leaving it. Age is what tells them apart: a
+live extraction keeps creating entries under its directory, which keeps
+bumping that directory's own `mtime`, so it never goes stale on its own; an
+abandoned one stops the instant the process dies. Once one has sat untouched
+past `--min-age` — the same bound that already governs how long reap waits
+before it can be sure nothing still needs something — it is swept.
+
 ## Pruning deleted environments
 
 By default the agent adds and updates environments but never deletes one — a

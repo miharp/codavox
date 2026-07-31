@@ -298,6 +298,11 @@ a superseded version is retained until it is older than that regardless of
 `code_id` will still request file content for it. Set `min_age` comfortably
 longer than your agent run interval plus its runtime.
 
+A crash mid-download (a `SIGKILL`, an OOM kill) can also leave one abandoned
+extraction directory behind, at most the size of one unpacked version. It is
+not a growing leak: the agent sweeps it once it has sat untouched past the
+same `min_age`. See [agent.md](agent.md#extractions-abandoned-by-a-crash).
+
 ### CPU and time
 
 Per deploy, from [performance.md](performance.md), on the 35 MB fixture:
