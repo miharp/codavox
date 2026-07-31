@@ -321,8 +321,33 @@ Each compiler transfers one artifact per environment per deploy — 7 MB on the
 fixture — and otherwise polls with a request and response of a few hundred
 bytes every `agent.interval` (default 30 s). A converged fleet is nearly silent.
 
-Polls are jittered by up to 25% of the interval, so a fleet restarted together
-does not stay in lockstep.
+Every poll is jittered by up to 25% of the interval — including the agent's
+first poll after it starts, not only the ones between polls. That first poll
+matters on its own: without jittering it, a fleet restarted together (a
+package upgrade, a reboot) makes every agent's very first request land in the
+same instant, which the steady-state jitter cannot reach, since it only takes
+effect after that first call returns.
+
+**The one real burst is a coordinated restart landing on a pending deploy.**
+The poll itself is cheap no matter how many compilers make it at once — one
+JSON-encoded map, no disk I/O — but if every agent's first poll also finds a
+new `code_id` (a fleet rolling out for the first time, or restarting into a
+deploy that landed while it was down), every compiler fetches the artifact
+inside that same jittered window. That is bandwidth, not CPU: fleet size
+times artifact size, spread over roughly `agent.interval / 4` (7.5 s by
+default), landing on one publisher. `serveArtifact` sets no cap of its own —
+it is a plain file open and copy — so this is genuinely fleet size times
+artifact size divided by the jitter window, not smoothed further:
+
+| fleet size | data (at 7 MB/artifact) | sustained over 7.5 s |
+|---|---|---|
+| 50 compilers | 350 MB | ~47 MB/s (~370 Mbps) |
+| 1,000 compilers | 7 GB | ~930 MB/s (~7.5 Gbps) |
+
+The first is unremarkable on any real link. The second is not — plan for it
+if you are rolling out to a large fleet at once, or restarting one right after
+a deploy: widen `agent.interval` for the rollout, stagger the restart in
+batches, or simply expect the burst and size the primary's network for it.
 
 ## What survives what
 

@@ -240,5 +240,5 @@ go test ./internal/agent/ -run TestTwoCompilersConverge -v
 
 ```text
 both compilers at 7b05ff28279c54d252387a522beee5a434c234713c8c8c545ee34bc531930d3a
-both compilers converged to 73433dde9ecef3abf51d2a7f8e148bf7e679610f3173752fabb4dcb2d0f418d3 after catch-up
+both compilers converged to 73433dde9ecef3ab1709d4c957bf2ba914f16685bae2d2f4abb7b5c4e66eb8e3 after catch-up
 ```
