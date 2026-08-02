@@ -152,6 +152,10 @@ func (a *Agent) Once(ctx context.Context) error {
 		}
 	}
 
+	// Fleet-wide, not per-environment: it sweeps everything abandoned in
+	// versions/, regardless of which environment it belonged to.
+	a.reapStaleExtractions()
+
 	// Prune runs only after a successful fetch (a failed one returned above), so
 	// a publisher outage is never mistaken for "every environment was deleted."
 	// It is independent of per-environment sync failures: a failed sync leaves
@@ -471,6 +475,50 @@ func (a *Agent) reapVersions(env, current string, keep int) error {
 		a.cfg.Logger.Info("reaped old version", "environment", env, "version", v.name)
 	}
 	return nil
+}
+
+// reapStaleExtractions removes dot-prefixed extraction directories abandoned
+// mid-download by a crash -- a SIGKILL, an OOM kill, a power loss -- none of
+// which run download's deferred cleanup, so the directory is left exactly as
+// it was.
+//
+// reapVersions must never touch these: a directory still being extracted by a
+// concurrently running agent looks identical to an abandoned one, and pulling
+// it out from under a live extraction would be worse than leaving it. Age is
+// what tells them apart. A live extraction keeps creating entries under its
+// directory, which keeps bumping that directory's own mtime, so it never goes
+// stale; an abandoned one stops the instant the process dies and its mtime
+// stops moving with it. MinAge is already the bound the rest of reap uses for
+// "how long before we are sure nothing still needs this" -- performance.md's
+// fixture unpacks in well under a second, so even the 2-hour default leaves an
+// enormous margin before this ever mistakes a live extraction for a dead one.
+func (a *Agent) reapStaleExtractions() {
+	versionsDir := filepath.Join(a.cfg.Layout.Root, "versions")
+	entries, err := os.ReadDir(versionsDir)
+	if err != nil {
+		// A per-environment reap in this same cycle already surfaces a real
+		// ReadDir failure; a missing versions directory just means nothing has
+		// been synced yet.
+		return
+	}
+
+	cutoff := time.Now().Add(-a.cfg.MinAge)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		path := filepath.Join(versionsDir, e.Name())
+		if err := os.RemoveAll(path); err != nil {
+			a.cfg.Logger.Warn("reaping abandoned extraction failed", "path", path, "error", err)
+			continue
+		}
+		a.cfg.Logger.Info("reaped abandoned extraction",
+			"path", path, "age", time.Since(info.ModTime()).Round(time.Minute))
+	}
 }
 
 // prune removes environments the publisher no longer advertises.

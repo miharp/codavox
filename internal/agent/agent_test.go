@@ -353,6 +353,51 @@ func TestReapRespectsMinAge(t *testing.T) {
 	}
 }
 
+// A dot-prefixed directory is what download leaves behind when a crash --
+// SIGKILL, an OOM kill, a power loss -- skips its deferred cleanup mid-extract.
+// It must be swept once clearly abandoned, but never while it could still be a
+// live extraction in another process, which looks identical until it is old
+// enough to rule that out.
+func TestReapRemovesAbandonedExtractionsPastMinAge(t *testing.T) {
+	f := newFixture(t)
+	f.agent.cfg.MinAge = time.Hour
+	ctx := context.Background()
+
+	f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "x\n"})
+	if err := f.agent.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	versionsDir := filepath.Join(f.layout.Root, "versions")
+
+	abandoned := filepath.Join(versionsDir, ".production_deadbeef.123456")
+	if err := os.Mkdir(abandoned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(abandoned, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// mtime defaults to now, well inside MinAge -- simulating an extraction
+	// still actively creating entries under it.
+	live := filepath.Join(versionsDir, ".production_cafef00d.654321")
+	if err := os.Mkdir(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.agent.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(abandoned); !os.IsNotExist(err) {
+		t.Errorf("abandoned extraction past MinAge was not reaped: err=%v", err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Errorf("extraction younger than MinAge was reaped: %v", err)
+	}
+}
+
 func TestNewValidatesConfig(t *testing.T) {
 	if _, err := New(Config{Client: http.DefaultClient}); err == nil {
 		t.Error("expected an error when BaseURL is missing")
