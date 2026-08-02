@@ -96,9 +96,10 @@ together polls in lockstep forever.
 
 The response body is piped straight into the extractor — nothing is written to
 disk as a plain file first. There is no intermediate copy of the artifact
-sitting around to be inspected, retried from, or left behind by a crash
-mid-download; the only things that ever touch disk are the temporary
-extraction directory and, on success, the final version directory.
+sitting around to be inspected or retried from; the only things that ever
+touch disk are the temporary extraction directory and, on success, the final
+version directory. What happens to that temporary directory if the process
+dies mid-extraction is covered under [Reaping](#reaping).
 
 The body is a gzipped tar (`Content-Type: application/gzip`). That gzip is the
 archive format itself, produced once at seal time — not an HTTP
