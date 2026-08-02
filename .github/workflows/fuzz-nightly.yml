@@ -60,7 +60,7 @@ jobs:
       # night would start from the seeds again and re-derive minute one for eight
       # hours. Restore-keys let today's run build on yesterday's.
       - name: Restore the fuzz corpus
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/.gocache/fuzz
           restore-keys: |
@@ -89,7 +89,7 @@ jobs:
       # action's implicit post step would not save it.
       - name: Save the fuzz corpus
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ github.workspace }}/.gocache/fuzz
           key: fuzz-corpus-${{ github.run_id }}
