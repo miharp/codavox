@@ -32,7 +32,8 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 
 1. Poll `/v1/environments` for the current `code_id` of each environment.
 2. Skip any environment already at that version.
-3. Fetch the artifact, extract it to a temporary directory.
+3. Fetch `GET /v1/artifact/{environment}/{code_id}` over the same mutual TLS
+   as the poll, and extract it to a temporary directory.
 4. **Verify by resealing the extracted tree** and comparing to the requested
    `code_id`.
 5. Rename the temporary directory into place.
@@ -90,6 +91,18 @@ means losing catalog compilation entirely.
 
 Polls are jittered by up to 25% of the interval. Without it, a fleet restarted
 together polls in lockstep forever.
+
+## The fetch is streamed, not staged
+
+The response body is piped straight into the extractor — nothing is written to
+disk as a plain file first. There is no intermediate copy of the artifact
+sitting around to be inspected, retried from, or left behind by a crash
+mid-download; the only things that ever touch disk are the temporary
+extraction directory and, on success, the final version directory.
+
+The body is a gzipped tar (`Content-Type: application/gzip`). That gzip is the
+archive format itself, produced once at seal time — not an HTTP
+`Content-Encoding` the transport adds on top.
 
 ## Verification is by resealing, not by checksum
 
