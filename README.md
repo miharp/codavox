@@ -173,6 +173,37 @@ This is the manual path: every command run by hand, so you can see how the
 pieces fit or try codavox on a single test node. For production, or more than
 one node, use the module in [Install](#install) instead.
 
+### Before you start: r10k and your control repo
+
+codavox has no control-repo setting. Your control repo is configured in
+**r10k**, and codavox invokes r10k as it is already set up on the primary:
+`codavox deploy` runs the `r10k` binary with whatever `r10k.yaml` r10k would
+use on its own. If you already deploy with r10k, nothing changes — skip ahead.
+
+On a fresh host that has never run r10k, install it into OpenVox's bundled
+Ruby and point it at your control repo:
+
+```console
+/opt/puppetlabs/puppet/bin/gem install r10k
+```
+
+```yaml
+# /etc/puppetlabs/r10k/r10k.yaml
+sources:
+  puppet:
+    remote: https://github.com/example/control-repo.git
+    basedir: /etc/puppetlabs/code/environments
+```
+
+That `basedir` is the directory codavox observes — the same path you pass as
+`--basedir` in every command below. To point codavox at a different r10k
+binary or config file, set `r10k` and `r10k_config` in the
+[config file](docs/configuration.md); see
+[deploying.md](docs/deploying.md#where-your-control-repo-is-configured) for
+the details.
+
+### Deploy and serve
+
 Put the `codavox` binary on your primary and each compiler. Then, on the
 primary, run the publisher and deploy. The deploy command is the one you know
 from `puppet-code`:

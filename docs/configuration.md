@@ -86,6 +86,12 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | `agent.min_age` | agent | `--min-age` |
 | `agent.prune_environments` | agent | `--prune-environments` |
 
+`r10k` and `r10k_config` point at r10k itself, not at your code: the control
+repo is configured inside `r10k.yaml` (its `sources:` section), which codavox
+reads only through r10k. Leave both unset to use the r10k already on the host.
+See [Where your control repo is
+configured](deploying.md#where-your-control-repo-is-configured).
+
 ## Typos are errors
 
 An unknown key is rejected rather than ignored, so a misspelled setting fails
