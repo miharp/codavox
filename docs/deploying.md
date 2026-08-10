@@ -35,13 +35,37 @@ Code Manager runs r10k once and distributes the result.
 | `--wait` | | Block until the publisher serves each new `code_id` |
 | `--no-modules` | | Skip Puppetfile module resolution (`r10k` without `--puppetfile`) |
 | `--r10k` | `r10k` on `PATH`, then `/opt/puppetlabs/puppet/bin/r10k` | r10k binary |
-| `--r10k-config` | r10k's default | r10k.yaml passed with `--config` |
+| `--r10k-config` | r10k's own lookup | r10k.yaml passed with `--config` |
 | `--basedir` | *required* | r10k's basedir, the same directory the publisher serves |
 | `--state` | `<root>/state` | Publisher state directory (pidfile and artifacts) |
 | `--json` | | Emit results as a JSON array |
 
 `--basedir` and `--state` must match the publisher's own flags. r10k's basedir,
 `publish --basedir`, and `deploy --basedir` are the same directory.
+
+## Where your control repo is configured
+
+In r10k, not in codavox. codavox has no control-repo setting: `deploy` shells
+out to r10k, and r10k reads the control repo URL from the `sources:` section of
+its own `r10k.yaml`:
+
+```yaml
+# /etc/puppetlabs/r10k/r10k.yaml
+sources:
+  puppet:
+    remote: https://github.com/example/control-repo.git
+    basedir: /etc/puppetlabs/code/environments
+```
+
+Which `r10k.yaml` is used follows r10k's own rules. With `--r10k-config` unset,
+codavox passes no `--config` at all, so r10k performs its normal lookup —
+`/etc/puppetlabs/r10k/r10k.yaml` on a stock install. Set `--r10k-config` (or
+`r10k_config` in the [config file](configuration.md)) only to pin a different
+file, and `--r10k` only to pin a different binary.
+
+To change which repo or branches you deploy, edit `r10k.yaml` exactly as you
+would without codavox. codavox picks the change up on the next deploy, because
+it distributes whatever r10k resolves into the basedir.
 
 ## `--wait`
 
