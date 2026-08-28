@@ -507,6 +507,18 @@ Upgrading a compiler's package does not disturb what it is serving: the binary
 is replaced, the version directories and symlinks are not. Restart
 `codavox-agent` to pick up the new binary.
 
+### Upgrading to 0.7
+
+From 0.7 the agent expires each environment it swaps from OpenVox Server's
+cache, and treats a refused flush as a failed sync — so a compiler upgraded
+before its `auth.conf` allows the flush reports every deploy as `sync failed`
+with a `403`, while still deploying the code. Add the rule from [Wiring into
+puppetserver](commands.md#wiring-into-puppetserver) **before** upgrading the
+agent; with [`puppet-codavox`](https://github.com/miharp/puppet-codavox) that
+means module 0.4.0 first, which writes it. The rule is harmless to an older
+agent. Nothing about the artifact format or the `code_id` derivation changed, so
+no environment is re-downloaded.
+
 ## Backup and rebuild
 
 Almost nothing here is precious, by design:
