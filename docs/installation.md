@@ -70,12 +70,12 @@ URL. Both package managers resolve dependencies and support clean removal when
 installing from a file. Set `VERSION` to the latest release:
 
 ```console
-VERSION=0.6.2
+VERSION=0.7.0
 dnf install "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.rpm"
 ```
 
 ```console
-VERSION=0.6.2
+VERSION=0.7.0
 curl -fsSLO "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.deb"
 apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 ```
