@@ -11,6 +11,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -518,5 +521,150 @@ func TestOnceReportsTheVersionItJustDeployed(t *testing.T) {
 	}
 	if got := peers.List()[0].Polls - before; got != 1 {
 		t.Errorf("a converged run made %d requests, want 1", got)
+	}
+}
+
+// cacheFlushRecorder stands in for OpenVox Server's admin API, recording each
+// environment it was asked to expire and answering with whatever status the
+// test has queued.
+type cacheFlushRecorder struct {
+	*httptest.Server
+	status   int
+	flushed  []string
+	requests int
+}
+
+func newCacheFlushRecorder(t *testing.T) *cacheFlushRecorder {
+	t.Helper()
+	r := &cacheFlushRecorder{status: http.StatusNoContent}
+	r.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.requests++
+		if req.Method != http.MethodDelete || req.URL.Path != EnvironmentCachePath {
+			t.Errorf("unexpected request %s %s; want DELETE %s", req.Method, req.URL.Path, EnvironmentCachePath)
+		}
+		r.flushed = append(r.flushed, req.URL.Query().Get("environment"))
+		w.WriteHeader(r.status)
+	}))
+	t.Cleanup(r.Close)
+	return r
+}
+
+func TestSwapFlushesThatEnvironmentsCache(t *testing.T) {
+	f := newFixture(t)
+	ps := newCacheFlushRecorder(t)
+	f.agent.cfg.PuppetServer = ps.URL
+
+	f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "node default { }\n"})
+	f.publishEnv(t, "staging", map[string]string{"manifests/site.pp": "node default { }\n"})
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	got := append([]string(nil), ps.flushed...)
+	sort.Strings(got)
+	if want := []string{"production", "staging"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("flushed %v after the first deploy, want %v", got, want)
+	}
+
+	// Nothing changed: nothing to expire. A flush on every poll would make the
+	// server re-parse both environments every 30 seconds for no reason.
+	ps.flushed = nil
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(ps.flushed) != 0 {
+		t.Errorf("a no-op reconciliation flushed %v", ps.flushed)
+	}
+
+	// Only the environment that moved is expired, not every cached one.
+	f.publishEnv(t, "staging", map[string]string{"manifests/site.pp": "node default { notify { 'x': } }\n"})
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if want := []string{"staging"}; !reflect.DeepEqual(ps.flushed, want) {
+		t.Errorf("flushed %v after staging moved, want %v", ps.flushed, want)
+	}
+}
+
+// A swap cannot be undone, so a flush that fails is a reconciliation that
+// failed — the server is compiling the old tree under the new code_id until it
+// lands — and it stays owed, retried on the next poll even with nothing new to
+// deploy.
+func TestFailedFlushFailsTheSyncAndIsRetried(t *testing.T) {
+	f := newFixture(t)
+	ps := newCacheFlushRecorder(t)
+	ps.status = http.StatusForbidden
+	f.agent.cfg.PuppetServer = ps.URL
+
+	want := f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "node default { }\n"})
+	err := f.agent.Once(context.Background())
+	if err == nil {
+		t.Fatal("Once succeeded although the environment cache flush was refused")
+	}
+	if !strings.Contains(err.Error(), "flush") || !strings.Contains(err.Error(), "production") {
+		t.Errorf("error should name the flush and the environment, got: %v", err)
+	}
+	// The deploy itself still landed: refusing the swap would not help, the
+	// server has to be told either way.
+	if got, _ := f.layout.CurrentCodeID("production"); got != want {
+		t.Errorf("code-id = %s after a failed flush, want %s (the swap must not be rolled back)", got, want)
+	}
+
+	ps.status = http.StatusNoContent
+	ps.flushed = nil
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once after the server started allowing the flush: %v", err)
+	}
+	if want := []string{"production"}; !reflect.DeepEqual(ps.flushed, want) {
+		t.Errorf("retry flushed %v, want %v", ps.flushed, want)
+	}
+
+	// Paid off: a third poll owes nothing.
+	ps.flushed = nil
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(ps.flushed) != 0 {
+		t.Errorf("an already-flushed environment was flushed again: %v", ps.flushed)
+	}
+}
+
+func TestPruneFlushesTheRemovedEnvironment(t *testing.T) {
+	f := newFixture(t)
+	ps := newCacheFlushRecorder(t)
+	f.agent.cfg.PuppetServer = ps.URL
+	f.agent.cfg.Prune = true
+
+	f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "node default { }\n"})
+	f.publishEnv(t, "feature", map[string]string{"manifests/site.pp": "node default { }\n"})
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+
+	// The publisher stops advertising feature; the server must stop compiling
+	// its cached copy too, or it keeps serving an environment that no longer
+	// exists.
+	if err := os.RemoveAll(filepath.Join(f.basedir, "feature")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	ps.flushed = nil
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if want := []string{"feature"}; !reflect.DeepEqual(ps.flushed, want) {
+		t.Errorf("flushed %v after pruning feature, want %v", ps.flushed, want)
+	}
+}
+
+func TestNoPuppetServerMeansNoFlush(t *testing.T) {
+	f := newFixture(t)
+	f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "node default { }\n"})
+	if err := f.agent.Once(context.Background()); err != nil {
+		t.Fatalf("Once with the flush disabled: %v", err)
+	}
+	if len(f.agent.pendingFlush) != 0 {
+		t.Errorf("flush disabled, yet %v is recorded as owed", f.agent.pendingFlush)
 	}
 }

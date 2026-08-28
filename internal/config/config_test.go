@@ -154,3 +154,32 @@ func TestLoadRejectsMalformedYAML(t *testing.T) {
 		t.Error("expected error for malformed YAML")
 	}
 }
+
+func TestLoadFlushEnvironmentCacheDistinguishesUnsetFromFalse(t *testing.T) {
+	unset, err := Load(writeConfig(t, "agent:\n  publisher: https://p:8150\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if unset.Agent.FlushEnvironmentCache != nil {
+		t.Errorf("flush_environment_cache left out should be nil (default on), got %v", *unset.Agent.FlushEnvironmentCache)
+	}
+	if unset.Agent.PuppetServer != "" {
+		t.Errorf("puppetserver left out should be empty, got %q", unset.Agent.PuppetServer)
+	}
+
+	off, err := Load(writeConfig(t, `
+agent:
+  publisher: https://p:8150
+  puppetserver: https://compiler01.example.com:8140
+  flush_environment_cache: false
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if off.Agent.FlushEnvironmentCache == nil || *off.Agent.FlushEnvironmentCache {
+		t.Errorf("flush_environment_cache: false should load as false, got %v", off.Agent.FlushEnvironmentCache)
+	}
+	if off.Agent.PuppetServer != "https://compiler01.example.com:8140" {
+		t.Errorf("puppetserver = %q", off.Agent.PuppetServer)
+	}
+}

@@ -64,6 +64,15 @@ type Config struct {
 		Keep              int    `yaml:"keep"`
 		MinAge            string `yaml:"min_age"`
 		PruneEnvironments bool   `yaml:"prune_environments"`
+		// PuppetServer is the OpenVox Server on this node whose environment
+		// cache the agent flushes after a swap; empty means
+		// https://<certname>:8140.
+		PuppetServer string `yaml:"puppetserver"`
+		// FlushEnvironmentCache is a pointer so that leaving it out keeps the
+		// default of on: a plain bool cannot tell "unset" from "false", and the
+		// flush is what keeps a cached server from compiling the old tree under
+		// the new code_id.
+		FlushEnvironmentCache *bool `yaml:"flush_environment_cache"`
 	} `yaml:"agent"`
 }
 

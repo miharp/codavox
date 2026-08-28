@@ -511,16 +511,19 @@ func agentRun(args []string) error {
 	base := layout.New()
 
 	opts := struct {
-		publisher string
-		certname  string
-		ssldir    string
-		envPath   string
-		interval  time.Duration
-		keep      int
-		minAge    time.Duration
-		once      bool
-		prune     bool
+		publisher    string
+		puppetserver string
+		flush        bool
+		certname     string
+		ssldir       string
+		envPath      string
+		interval     time.Duration
+		keep         int
+		minAge       time.Duration
+		once         bool
+		prune        bool
 	}{
+		flush:    true,
 		ssldir:   puppetca.DefaultSSLDir,
 		envPath:  base.EnvironmentPath,
 		interval: agent.DefaultInterval,
@@ -535,7 +538,11 @@ func agentRun(args []string) error {
 	if cfg.Agent.PruneEnvironments {
 		opts.prune = true
 	}
+	if cfg.Agent.FlushEnvironmentCache != nil {
+		opts.flush = *cfg.Agent.FlushEnvironmentCache
+	}
 	overlay(&opts.publisher, cfg.Agent.Publisher)
+	overlay(&opts.puppetserver, cfg.Agent.PuppetServer)
 	overlay(&opts.certname, cfg.Certname)
 	overlay(&opts.ssldir, cfg.SSLDir)
 	overlay(&opts.envPath, cfg.EnvironmentPath)
@@ -568,6 +575,12 @@ func agentRun(args []string) error {
 			_, err = next()
 		case "--publisher":
 			opts.publisher, err = next()
+		case "--puppetserver":
+			opts.puppetserver, err = next()
+		case "--flush-environment-cache":
+			if v, err = next(); err == nil {
+				opts.flush, err = strconv.ParseBool(v)
+			}
 		case "--certname":
 			opts.certname, err = next()
 		case "--ssldir":
@@ -609,6 +622,17 @@ func agentRun(args []string) error {
 		opts.certname = hostname
 	}
 
+	// The server is addressed by this node's certname, not localhost: it
+	// presents its Puppet certificate, which is issued for the certname and
+	// would not verify against localhost. Same reason `codavox compilers`
+	// defaults the publisher's URL the way it does.
+	if opts.puppetserver == "" {
+		opts.puppetserver = "https://" + net.JoinHostPort(opts.certname, "8140")
+	}
+	if !opts.flush {
+		opts.puppetserver = ""
+	}
+
 	paths := puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}
 	tlsConfig, err := paths.ClientTLS()
 	if err != nil {
@@ -616,7 +640,8 @@ func agentRun(args []string) error {
 	}
 
 	a, err := agent.New(agent.Config{
-		BaseURL: opts.publisher,
+		BaseURL:      opts.publisher,
+		PuppetServer: opts.puppetserver,
 		Layout: layout.Layout{
 			Root:            base.Root,
 			EnvironmentPath: opts.envPath,

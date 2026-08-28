@@ -70,9 +70,98 @@ else
   fi
 fi
 
-# Feature 4: the deploy server's health endpoint is open, and the deploy API is
+# Feature 4: a deploy expires OpenVox Server's environment cache.
+#
+# This compiler runs with environment_timeout = unlimited (provision-compiler.sh),
+# as a production compiler does for compile speed, and a single JRuby instance
+# so every compile hits the same cache. With the cache held, the symlink swap
+# alone changes nothing the server compiles: it keeps the tree it parsed at its
+# first catalog while code-id, reading the symlink just moved, reports the new
+# code_id. The catalog that results is stamped with a code_id that does not
+# describe it — the plausible-but-wrong answer static catalogs exist to rule
+# out — so the assertion first reproduces that with the flush switched off, and
+# only then shows the flush fixing it. A flush that was never needed proves
+# nothing.
+log "Feature 4 — a deploy expires the compiler's environment cache"
+
+SITE_PP=/etc/puppetlabs/code/environments/production/manifests/site.pp
+CATALOG=/opt/puppetlabs/puppet/cache/client_data/catalog/compiler.json
+
+# compile_catalog — request a fresh catalog from the compiler; 0 and 2 are both
+# a successful run.
+compile_catalog() {
+  docker exec "$COMPILER" bash -lc \
+    '/opt/puppetlabs/bin/puppet agent -t --server compiler >/tmp/agent.log 2>&1; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ]'
+}
+# catalog_has <text> — whether the last catalog the compiler received carries it.
+catalog_has() { docker exec "$COMPILER" grep -qF -- "$1" "$CATALOG"; }
+# catalog_code_id — the code_id stamped on that catalog.
+catalog_code_id() {
+  docker exec "$COMPILER" bash -lc "grep -o '\"code_id\":\"[^\"]*\"' $CATALOG | head -1 | cut -d'\"' -f4"
+}
+# deploy_marker <text> — add a top-level notify to site.pp on the primary,
+# reseal, and wait for the compiler to converge on the new code_id.
+deploy_marker() {
+  local prev
+  prev=$(code_id "$COMPILER" production)
+  docker exec "$PRIMARY" bash -lc "printf 'notify { \"%s\": }\n' '$1' >> $SITE_PP"
+  docker exec "$PRIMARY" systemctl reload codavox-publish
+  wait_for 45 "$COMPILER" "[ \"\$(codavox-code-id production)\" != '$prev' ]"
+}
+# set_flush <true|false> — flip the agent's flush and restart it.
+set_flush() {
+  docker exec "$COMPILER" sed -i "s/^  flush_environment_cache: .*/  flush_environment_cache: $1/" /etc/codavox/config.yaml
+  docker exec "$COMPILER" systemctl restart codavox-agent
+}
+
+# First, the hazard. Prime the cache with a compile, then deploy with the flush
+# off: the new code_id must arrive while the catalog stays on the old tree.
+set_flush false
+stale="codavox stale-cache marker $(date +%s%N)"
+if compile_catalog && deploy_marker "$stale" && compile_catalog; then
+  served=$(code_id "$COMPILER" production)
+  stamped=$(catalog_code_id)
+  if catalog_has "$stale"; then
+    fail "without a flush the catalog still picked up the deploy — this server has no cache to expire, so the feature is untested"
+  elif [ "$stamped" = "$served" ]; then
+    pass "without a flush the catalog is stamped $served but compiled from the old tree"
+  else
+    fail "without a flush the catalog is stamped $stamped, the compiler serves $served"
+  fi
+else
+  docker exec "$COMPILER" tail -20 /tmp/agent.log 2>/dev/null || true
+  fail "could not reproduce a stale environment cache (deploy or compile failed)"
+fi
+
+# Then the fix. With the flush back on, the next deploy is what the server
+# compiles — and it also carries the marker the stale compile missed.
+set_flush true
+fresh="codavox flushed-cache marker $(date +%s%N)"
+if deploy_marker "$fresh" && compile_catalog; then
+  if catalog_has "$fresh" && catalog_has "$stale"; then
+    pass "after the flush the catalog carries the deploy, stamped $(catalog_code_id)"
+  else
+    fail "after the flush the catalog still lacks the deployed change"
+    docker exec "$COMPILER" grep -o '"title":"codavox[^"]*"' "$CATALOG" 2>/dev/null | sed 's/^/      /'
+  fi
+else
+  docker exec "$COMPILER" tail -20 /tmp/agent.log 2>/dev/null || true
+  fail "deploy or compile failed with the flush on"
+fi
+
+# The agent says what it did, in the journal — see README.md on why not
+# `docker logs`.
+if docker exec "$COMPILER" journalctl -u codavox-agent --no-pager 2>/dev/null \
+  | grep -q 'environment cache flushed'; then
+  pass "the agent logged the flush"
+else
+  fail "the agent never logged 'environment cache flushed'"
+  docker exec "$COMPILER" journalctl -u codavox-agent --no-pager -n 15 2>&1 | tail -15
+fi
+
+# Feature 5: the deploy server's health endpoint is open, and the deploy API is
 # gated by the bearer token.
-log "Feature 4 — deploy server: health open, deploy API token-gated"
+log "Feature 5 — deploy server: health open, deploy API token-gated"
 health=$(docker exec "$COMPILER" bash -lc "curl -sk --max-time 5 https://primary:8170/v1/health")
 if printf '%s' "$health" | grep -q '"status":"ok"'; then
   pass "GET /v1/health -> $health"
@@ -96,9 +185,9 @@ else
   fail "authenticated deploys returned $auth, want 200"
 fi
 
-# Feature 5: no fallback — asking for content at a version that is not deployed,
+# Feature 6: no fallback — asking for content at a version that is not deployed,
 # or an unknown environment, is a hard error, never a plausible-but-wrong answer.
-log "Feature 5 — no fallback: undeployed content and unknown env are hard errors"
+log "Feature 6 — no fallback: undeployed content and unknown env are hard errors"
 if docker exec "$COMPILER" codavox-code-content production notdeployed manifests/site.pp >/dev/null 2>&1; then
   fail "code-content for an undeployed code_id exited 0"
 else
@@ -110,9 +199,9 @@ else
   pass "code-id for an unknown environment exits non-zero"
 fi
 
-# Feature 6: the agent reaps old version directories rather than letting them
+# Feature 7: the agent reaps old version directories rather than letting them
 # accumulate (keep=2).
-log "Feature 6 — the agent prunes old version directories (keep=2)"
+log "Feature 7 — the agent prunes old version directories (keep=2)"
 for _ in 1 2 3; do bump_and_reseal; sleep 8; done
 sleep 8
 count=$(docker exec "$COMPILER" bash -lc \
@@ -123,7 +212,7 @@ else
   fail "version directories grew to $count (prune not reaping)"
 fi
 
-# Feature 7: the publisher's fleet view reports what the compiler itself says it
+# Feature 8: the publisher's fleet view reports what the compiler itself says it
 # is serving, and agrees with that node's own code-id.
 #
 # The agent here is a long-running daemon polling over one keep-alive connection,
@@ -131,7 +220,7 @@ fi
 # --once`, a fresh process and a fresh connection per sync. If the report only
 # rode on the first request of a connection, or the publisher only read the
 # header at handshake, it would pass every unit test and fail here.
-log "Feature 7 — the fleet view matches what the compiler reports serving"
+log "Feature 8 — the fleet view matches what the compiler reports serving"
 
 # Read it the way an operator does: on the publisher, using that node's own
 # certificate. No --publisher, so the default URL is exercised too.
@@ -203,12 +292,12 @@ else
   fail "codavox compilers did not list the compiler"
 fi
 
-# Feature 8: revoking a compiler's Puppet certificate revokes its access to code.
+# Feature 9: revoking a compiler's Puppet certificate revokes its access to code.
 # The certificate stays cryptographically valid and keeps its pp_role, so only
 # the CRL check stops it — and it must take effect without restarting anything.
 #
 # This runs last: the compiler cannot fetch code afterwards.
-log "Feature 8 — revoking a compiler's certificate cuts off its access to code"
+log "Feature 9 — revoking a compiler's certificate cuts off its access to code"
 before=$(code_id "$COMPILER" production)
 # Keep the output: when this failed in CI it was suppressed, so the log said
 # only "could not revoke" and not that the CA host did not resolve.

@@ -27,6 +27,8 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 | `--keep` | `3` | Superseded versions retained per environment |
 | `--min-age` | `2h` | Minimum retention regardless of `--keep` |
 | `--prune-environments` | off | Remove environments the publisher no longer serves |
+| `--puppetserver` | `https://<certname>:8140` | The OpenVox Server on this node whose environment cache to expire |
+| `--flush-environment-cache` | `true` | Expire the environment in that server's cache after every swap |
 
 ## What a reconciliation does
 
@@ -39,6 +41,8 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 5. Rename the temporary directory into place.
 6. Atomically swap the environment symlink.
 7. Reap superseded versions.
+8. Once every environment is in place, tell this node's OpenVox Server to
+   expire each one that moved from its environment cache.
 
 ## codavox owns its codedir
 
@@ -131,6 +135,107 @@ version or the new one, never an absent or half-written link.
 
 **Do not use `ln -sf`.** It unlinks before creating, leaving a window where the
 environment does not exist at all — during which catalog compilation fails.
+
+## Expiring the environment cache
+
+The swap alone is not a deploy. OpenVox Server caches each environment it has
+compiled — the parsed manifests, the module list, the loaded types — for
+`environment_timeout`, and a production compiler sets that to `unlimited` so it
+does not re-parse the whole environment on every catalog. A server holding that
+cache never looks at the symlink again. So after a swap it keeps compiling the
+tree it parsed earlier, while `code-id` — spawned fresh on every compile and
+reading the symlink that just moved — reports the new `code_id`. Every catalog
+compiled in that state is stamped with a `code_id` that does not describe it,
+and `code-content` then serves the new tree's bytes for resources compiled from
+the old one. That is the plausible-but-wrong answer static catalogs exist to
+rule out, and it exits 0.
+
+So after every reconciliation that moved anything, the agent asks the server on
+this node to expire each environment that moved:
+
+```text
+DELETE https://<certname>:8140/puppet-admin-api/v1/environment-cache?environment=<env>
+```
+
+It expires that environment only, not the whole cache: nothing else changed,
+and dropping every environment would make each deploy re-parse the whole
+estate. A pruned environment is expired too, or the server would keep compiling
+an environment that no longer exists. The request goes over the same client as
+the poll, so it carries this node's own Puppet certificate — which is what the
+server must be told to admit.
+
+### The server has to allow it
+
+The `auth.conf` OpenVox Server ships has no rule for that path, so it falls
+through to `puppetlabs deny all` and the request is refused with `403`. Add a
+rule to `/etc/puppetlabs/puppetserver/conf.d/auth.conf` and restart
+`puppetserver`:
+
+```hocon
+{
+    match-request: {
+        path: "/puppet-admin-api/v1/environment-cache"
+        type: path
+        method: delete
+    }
+    # pp_role, by OID — see below for why not by name.
+    allow: { extensions: { "1.3.6.1.4.1.34380.1.1.13": "openvox_compiler" } }
+    sort-order: 200
+    name: "codavox environment cache flush"
+}
+```
+
+That admits the same `pp_role` the publisher already requires of a compiler, so
+one rule covers the fleet. It names the extension by OID rather than as
+`pp_role` because a compiler runs with its CA service disabled, and the admin
+API is then authorized with no OID-to-short-name map at all: a rule written
+`pp_role: "openvox_compiler"` matches nothing there, and the server logs only
+`denied by rule 'codavox environment cache flush'`. (On a CA-bearing primary
+the short name would work; the OID works on both.) A node whose certificate
+carries no `pp_role` — a primary that compiles its own catalogs, or a compiler
+enrolled before codavox — is admitted by certname instead:
+`allow: ["compiler01.example.com"]`. With the
+[`puppet_authorization`](https://forge.puppet.com/modules/puppetlabs/puppet_authorization)
+module, `puppet_authorization::rule` writes the same rule;
+[`provision-compiler.sh`](../test/integration/provision-compiler.sh) shows it
+done by hand with the `hocon` gem the agent package ships.
+
+### A failed flush is a failed reconciliation
+
+Until the flush lands the server is compiling the old tree under the new
+`code_id`, so a refused or unreachable flush fails the reconciliation: `--once`
+exits 1, and the daemon logs it at ERROR — collapsed on repeats, like any other
+sync failure — with a `403` naming the missing rule rather than reading like a
+certificate problem. The swap is **not** rolled back. It cannot be undone
+safely, and the server has to be told either way; what the failure means is
+that this node is not yet converged.
+
+The flush stays owed and is retried on every poll until it succeeds, whether or
+not anything new was deployed. The usual reason it fails is that `puppetserver`
+is down or restarting, and a restarted server has an empty cache — so the
+retry is mostly for the case where the rule above is missing, where it keeps
+saying so until you add it. A restarted *agent* forgets what it owed; if you
+restart it after a failed flush, expire the cache yourself with the `DELETE`
+above or restart `puppetserver`.
+
+Nothing about this needs the agent to run beside its server in any particular
+order. Bring a compiler up agent-first, as [Rollout](production.md#rollout)
+says: the first flush fails because nothing is listening on 8140 yet, and lands
+on the first poll after the server comes up.
+
+### Turning it off
+
+Set `flush_environment_cache: false` (or `--flush-environment-cache false`) on
+a compiler that runs with `environment_timeout = 0`, where every compile
+re-reads the environment and there is nothing to expire. Point `puppetserver:`
+at the server if it does not listen on `https://<certname>:8140`. The default
+addresses the server by this node's certname rather than `localhost` for the
+same reason `codavox compilers` does: the server presents its Puppet
+certificate, which is issued for the certname and does not verify against
+`localhost`.
+
+PE's file sync makes the same call after every sync it commits, for the same
+reason.
 
 ## Reaping
 

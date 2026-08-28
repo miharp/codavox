@@ -50,26 +50,33 @@ second compiler if you want that shape too.
    — no push.
 3. **Offline catch-up.** A compiler whose agent is stopped across a deploy
    **catches up on its next poll**, with no event replayed to it.
-4. **Deploy server.** `GET /v1/health` is open; the deploy API is **gated by the
+4. **Environment cache.** The compiler runs with `environment_timeout =
+   unlimited`, as a production compiler does. With the agent's flush switched
+   off, a deploy **advances the `code_id` while the catalog stays on the old
+   tree** — stamped with a `code_id` that does not describe it. With it on, the
+   next deploy **is what the server compiles**. The hazard is reproduced first,
+   so the fix is not proven against a cache that was never held.
+5. **Deploy server.** `GET /v1/health` is open; the deploy API is **gated by the
    bearer token** (401 without, 200 with).
-5. **No fallback.** Asking for content at an undeployed `code_id`, or an unknown
+6. **No fallback.** Asking for content at an undeployed `code_id`, or an unknown
    environment, is a **hard error** — never a plausible-but-wrong answer.
-6. **Prune.** The agent **reaps old version directories** rather than letting
+7. **Prune.** The agent **reaps old version directories** rather than letting
    them accumulate.
-7. **Fleet view.** `codavox compilers` on the publisher reports what the
+8. **Fleet view.** `codavox compilers` on the publisher reports what the
    compiler **says it is serving**, and that answer **equals the compiler's own
    `codavox-code-id`**. It then follows a deploy through to the new version.
-8. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
+9. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
    off its access to code** — with no restart of the publisher, and while the
    certificate is still cryptographically valid and still carries its `pp_role`.
    Runs last, because the compiler cannot fetch code afterwards.
 
-Features 7 and 8 are the two that **no Go test can replace**. Every Go test
-drives `agent --once` — a fresh process and a fresh TLS connection per sync —
-whereas here the agent is a long-running daemon polling over one keep-alive
-connection. A report that only rode on the first request of a connection, or a
-CRL consulted only at handshake, would pass the entire unit suite and fail
-here.
+Features 4, 8, and 9 are the three that **no Go test can replace**. The
+environment cache is puppetserver's, so only a real server can show it going
+stale and being expired. For the other two, every Go test drives `agent --once`
+— a fresh process and a fresh TLS connection per sync — whereas here the agent
+is a long-running daemon polling over one keep-alive connection. A report that
+only rode on the first request of a connection, or a CRL consulted only at
+handshake, would pass the entire unit suite and fail here.
 
 ## Debugging a failed run
 
@@ -113,7 +120,7 @@ Two more things that mislead:
 |---|---|
 | [`run.sh`](run.sh) | Orchestrator: builds the package, brings up the stack, provisions, runs the features, tears down |
 | [`provision-primary.sh`](provision-primary.sh) | Boots the CA, seeds an environment, starts the publisher + deploy server |
-| [`provision-compiler.sh`](provision-compiler.sh) | Enrolls a `pp_role=openvox_compiler` cert, converges the agent, wires OpenVox Server |
+| [`provision-compiler.sh`](provision-compiler.sh) | Enrolls a `pp_role=openvox_compiler` cert, allows the cache flush in `auth.conf`, converges the agent, wires OpenVox Server |
 | [`features.sh`](features.sh) | The end-to-end assertions above |
 | [`compose.yml`](compose.yml) / [`Dockerfile`](Dockerfile) | The self-contained two-node topology |
 
@@ -158,7 +165,7 @@ bolt plan run ovadm::codavox server_host=puppet \
   --inventoryfile ~/projects/codavox/test/integration/inventory.yaml
 ```
 
-## Three bugs a real server found that unit tests could not
+## Four bugs a real server found that unit tests could not
 
 **Deployed version directories were mode 0700.** `os.MkdirTemp` creates 0700 and
 the agent renames that into place, so OpenVox Server — running as the `puppet`
@@ -178,3 +185,12 @@ never handshakes again, so a revoked compiler kept fetching code indefinitely.
 Every Go test passed, because `agent --once` is a fresh process and therefore a
 fresh connection on every sync. Only a real daemon holding a real connection
 shows it. The publisher now also checks per request.
+
+**`pp_role` does not resolve in `auth.conf` on a compiler.** The agent's cache
+flush was refused with `denied by rule` even though the rule allowed
+`extensions: { pp_role: "openvox_compiler" }` and the certificate carried it. A
+compiler runs with its CA service disabled, and the disabled service hands the
+admin API an authorization handler with **no** OID-to-short-name map, so only
+the raw OID (`1.3.6.1.4.1.34380.1.1.13`) or the certname matches there. The
+same rule works on the CA-bearing primary, which is where anyone testing by hand
+would try it first. See [versioned-code-contract.md](../../docs/versioned-code-contract.md).
