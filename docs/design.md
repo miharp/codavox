@@ -140,6 +140,11 @@ do not pay for it in source coupling.
   serves, guarded so a failed or empty poll never deletes. It relies on r10k
   purging the removed environment from the basedir.
 - **puppetserver's environment cache** interacting with symlink swaps.
+  *Solved:* after every swap the agent expires that environment through the
+  server's own admin API (`DELETE /puppet-admin-api/v1/environment-cache`),
+  and a refused flush fails the reconciliation rather than leaving the server
+  compiling the old tree under the new `code_id`. See
+  [agent.md](agent.md#expiring-the-environment-cache).
 - **Poller robustness** — *addressed:* a poll failure is logged and retried on
   the next tick rather than being fatal, so a publisher outage degrades to "no
   new deploys" rather than "no catalogs."

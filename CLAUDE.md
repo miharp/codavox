@@ -127,6 +127,17 @@ argument, and each is defended by a test or a doc.
   The view is in-memory and best effort by design: persisting it would create a
   second store of state the symlink already owns, to answer a diagnostic
   question.
+- **A swap is not a deploy until the server's cache is expired.** OpenVox
+  Server caches each environment for `environment_timeout` (production sets
+  `unlimited`) and never re-reads the symlink, so after a swap it would keep
+  compiling the old tree while `code-id` reports the new hash — a catalog
+  stamped with a `code_id` that does not describe it. The agent therefore
+  sends `DELETE /puppet-admin-api/v1/environment-cache?environment=<env>` to
+  the server on its own node after every swap and prune. A refused flush fails
+  the reconciliation and stays owed until it lands; the swap is never rolled
+  back. The harness proves the hazard before proving the fix
+  (`environment_timeout = unlimited`, flush off → stale catalog; flush on →
+  current).
 - **One broken environment must not stop the others.** `Store.Reseal` and the
   agent's `Once` both isolate per-environment failures: the failed environment
   keeps its last good version and is reported, while the rest converge. Refusing

@@ -110,6 +110,72 @@ Both from `src/clj/puppetlabs/puppetserver/common.clj`:
   sanitizes `\W` -> `_` (`lib/r10k/action/deploy/environment.rb:41`), but the
   two agree by coincidence rather than contract. Test it explicitly.
 
+## The environment cache is the server's, and a deploy must expire it
+
+Verified at openvox-server `d4000e57` (main, 2026-08-28) and openvox
+`96aaa7cf`; this section is newer than the commit at the top.
+
+Nothing in the versioned-code service tells the server that code changed.
+`code-id-command` is spawned fresh on every compile, but what it compiles comes
+from the environment cache, which lives for `environment_timeout`
+(`lib/puppet/defaults.rb:668-678`): the default `0` disables caching,
+`unlimited` — what the setting's own description tells you to move to in
+production — holds an environment "until the server is restarted or told to
+refresh the cache." A server holding the cache never re-reads the environment
+symlink, so a swap alone leaves it compiling the old tree and stamping the
+result with the new `code_id`.
+
+"Told to refresh" is the Puppet Admin API, mounted at `/puppet-admin-api`
+(`ezbake/config/conf.d/web-routes.conf:9`), from
+`src/clj/puppetlabs/services/puppet_admin/puppet_admin_core.clj`:
+
+```text
+DELETE /puppet-admin-api/v1/environment-cache?environment=<name>   -> 204
+```
+
+- The route reads the `environment` query parameter (`:82-84`). With it, the
+  resource expires that one environment; without it, every environment
+  (`:49-53`). Expire one: nothing else changed.
+- It answers `204 No Content` with no body, and deliberately defines no media
+  types so an `Accept: */*` client is not refused (`:27-47`).
+- Expiry lands in the Clojure-side cache **and** in every JRuby instance's
+  environment registry
+  (`src/clj/puppetlabs/services/jruby/jruby_puppet_core.clj:417-441`), so one
+  call covers the whole pool.
+
+**The shipped `auth.conf` denies it.** `ezbake/config/conf.d/auth.conf` has no
+rule for `/puppet-admin-api`, so the request falls to `puppetlabs deny all`
+(`:317-327`, `sort-order: 999`). The admin handler is wrapped in the ordinary
+trapperkeeper authorization (`puppet_admin_core.clj:117-137`), so a rule for the
+path is all it takes; the older `puppet-admin.client-whitelist` setting still
+works but logs a deprecation warning at startup and is slated for removal
+(`puppet_admin_service.clj:22-33`). codavox's rule is in
+[agent.md](agent.md#the-server-has-to-allow-it).
+
+**On a compiler, extension short names do not resolve.** The admin service
+takes its authorization handler from the CA service (`puppet_admin_service.clj:
+12-13, 38`). The real CA service builds that handler with Puppet's
+OID-to-short-name map, `puppet-short-names` merged with any
+`trusted-oid-mapping-file`
+(`src/clj/puppetlabs/services/ca/certificate_authority_service.clj:44-46`,
+`src/clj/puppetlabs/puppetserver/certificate_authority.clj:310-341,
+2280-2283`). The disabled CA service — what every compiler runs — returns the
+bare `wrap-with-authorization-check`
+(`src/clj/puppetlabs/services/ca/certificate_authority_disabled_service.clj:
+25-27`), which trapperkeeper-authorization calls with `{:oid-map {}}`, so the
+only extension it can name is `subject-alt-name`. An `allow` written
+`extensions: { pp_role: ... }` therefore matches nothing on a compiler and the
+request is "denied by rule". Keying the extension by its OID
+(`"1.3.6.1.4.1.34380.1.1.13"`) matches on both, because an unmapped OID is
+carried through as itself and a mapped one is translated on the rule side too.
+Verified live: the short-name rule answered 403, the OID rule 204, on the same
+server.
+
+**Design consequence:** the agent expires the environment after every swap,
+and treats a refused flush as a failed reconciliation. A `code-id-command` that
+answers correctly while the server compiles something else is the exact
+mismatch this whole contract exists to prevent.
+
 ## The performance constraint (this drives the language choice)
 
 `current-code-id` is invoked from `with-code-id` in

@@ -77,6 +77,10 @@ func (c compiler) syncOnceArgs(t *testing.T, bin, publisher string, extra ...str
 		"--certname", c.name,
 		"--ssldir", c.ssldir,
 		"--environmentpath", c.envPath,
+		// No OpenVox Server runs beside these compilers, so there is no
+		// environment cache to expire; the flush is covered by the agent's
+		// unit tests and, against a real server, by the integration harness.
+		"--flush-environment-cache", "false",
 	}
 	args = append(args, extra...)
 	cmd := exec.Command(bin, args...)
@@ -115,6 +119,7 @@ func (c compiler) syncOnceEnv(t *testing.T, bin, publisher string) error {
 		"--once",
 		"--certname", c.name,
 		"--ssldir", c.ssldir,
+		"--flush-environment-cache", "false",
 	)
 	cmd.Env = append(os.Environ(),
 		"CODAVOX_ROOT="+c.root,

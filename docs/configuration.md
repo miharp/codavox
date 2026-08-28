@@ -30,6 +30,10 @@ agent:
   interval:  30s
   keep:      3
   min_age:   2h
+  # The OpenVox Server on this node, whose environment cache the agent expires
+  # after every swap. Defaults to https://<certname>:8140.
+  puppetserver: https://compiler01.example.com:8140
+  flush_environment_cache: true
 ```
 
 ## Location and precedence
@@ -85,6 +89,8 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | `agent.keep` | agent | `--keep` |
 | `agent.min_age` | agent | `--min-age` |
 | `agent.prune_environments` | agent | `--prune-environments` |
+| `agent.puppetserver` | agent | `--puppetserver` |
+| `agent.flush_environment_cache` | agent | `--flush-environment-cache` |
 
 `r10k` and `r10k_config` point at r10k itself, not at your code: the control
 repo is configured inside `r10k.yaml` (its `sources:` section), which codavox

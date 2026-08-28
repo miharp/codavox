@@ -42,14 +42,16 @@ every catalog compile fails — loudly, which is the point, but it fails.
 So bring a compiler online in this order:
 
 1. Install the package (inert).
-2. Run `codavox agent` and let it converge — the environment links now exist.
-3. *Then* set `versioned-code.conf` and `environmentpath`.
-4. Canary one compiler and confirm catalogs compile before rolling the fleet.
+2. Add the `auth.conf` rule that lets the agent expire the server's environment
+   cache (see [Wiring into puppetserver](commands.md#wiring-into-puppetserver)).
+3. Run `codavox agent` and let it converge — the environment links now exist.
+4. *Then* set `versioned-code.conf` and `environmentpath`.
+5. Canary one compiler and confirm catalogs compile before rolling the fleet.
 
 It is reversible: [remove the package](#upgrading-and-removing) and revert those
 two settings, and the compiler is back to stock.
 
-**On a node that compiles its own catalogs, step 3 is riskier, not safer.** That
+**On a node that compiles its own catalogs, step 4 is riskier, not safer.** That
 includes a lone OpenVox Server and a primary that manages itself. Wire it before
 the agent has converged and the node cannot repair itself, because the agent that
 would apply the fix needs a catalog from the server it just broke — so the repair

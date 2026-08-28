@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -36,9 +37,24 @@ type Config struct {
 	MinAge time.Duration
 	// Prune removes environments the publisher no longer advertises. It is off
 	// by default: deleting an environment is destructive, so an operator opts in.
-	Prune  bool
-	Logger *slog.Logger
+	Prune bool
+	// PuppetServer is the base URL of the OpenVox Server this node runs, e.g.
+	// https://compiler01.example.com:8140, whose environment cache the agent
+	// flushes after every swap. Empty disables the flush, for a compiler whose
+	// environment_timeout is 0 and so has no cache to flush.
+	PuppetServer string
+	Logger       *slog.Logger
 }
+
+// EnvironmentCachePath is OpenVox Server's admin endpoint for expiring a cached
+// environment: DELETE with ?environment=<name>. Verified against
+// puppet_admin_core.clj; see docs/versioned-code-contract.md.
+const EnvironmentCachePath = "/puppet-admin-api/v1/environment-cache"
+
+// flushTimeout bounds one cache flush. The shared client's own timeout is sized
+// for artifact downloads, which is far too generous for a request that returns
+// 204 with no body.
+const flushTimeout = 30 * time.Second
 
 // Defaults applied by New for unset fields.
 const (
@@ -54,6 +70,14 @@ type Agent struct {
 	// syncFailures collapses a run of identical poll failures. Only Run touches
 	// it, so a single agent loop owns it and Once stays free of logging state.
 	syncFailures failureLog
+
+	// pendingFlush names the environments whose OpenVox Server cache is owed a
+	// flush: swapped or pruned, but not yet expired server-side. An entry
+	// outlives a failed flush so the next poll retries it — a swap cannot be
+	// undone once the symlink has moved, and until the flush lands the server
+	// keeps compiling the old tree while code-id reports the new one. Only Once
+	// touches it, from the single loop that owns the agent.
+	pendingFlush map[string]bool
 }
 
 // New returns an Agent, filling in defaults.
@@ -77,7 +101,8 @@ func New(cfg Config) (*Agent, error) {
 		cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
 	cfg.BaseURL = publish.TrimBase(cfg.BaseURL)
-	return &Agent{cfg: cfg}, nil
+	cfg.PuppetServer = publish.TrimBase(cfg.PuppetServer)
+	return &Agent{cfg: cfg, pendingFlush: map[string]bool{}}, nil
 }
 
 // Run polls until ctx is cancelled.
@@ -145,6 +170,7 @@ func (a *Agent) Once(ctx context.Context) error {
 		}
 		if changed {
 			moved = true
+			a.oweFlush(env)
 			a.cfg.Logger.Info("environment updated", "environment", env, "code_id", codeID)
 		}
 		if err := a.reap(env, codeID); err != nil {
@@ -161,10 +187,20 @@ func (a *Agent) Once(ctx context.Context) error {
 	// It is independent of per-environment sync failures: a failed sync leaves
 	// the environment in want, so it is never a prune candidate.
 	if a.cfg.Prune {
-		if a.prune(want) {
+		for _, env := range a.prune(want) {
 			moved = true
+			a.oweFlush(env)
 		}
 	}
+
+	// Expire what OpenVox Server has cached for every environment that moved,
+	// now that every symlink is in place. The swap alone is not a deploy: with
+	// environment_timeout set, the server keeps compiling the tree it already
+	// parsed while code-id — reading the symlink just moved — reports the new
+	// code_id, so a catalog would carry a code_id that does not describe it.
+	// That is the silent mismatch static catalogs exist to prevent, so a
+	// failed flush fails the reconciliation, and stays owed until it lands.
+	unflushed := a.flushPending(ctx)
 
 	// Tell the publisher what this node now serves, rather than leaving it to
 	// be noticed on the next poll. The poll above reported the state *before*
@@ -180,11 +216,84 @@ func (a *Agent) Once(ctx context.Context) error {
 		a.reportServing(ctx)
 	}
 
+	var problems []string
 	if len(failures) > 0 {
 		sort.Strings(failures)
-		return fmt.Errorf("failed to sync: %s", strings.Join(failures, ", "))
+		problems = append(problems, "failed to sync: "+strings.Join(failures, ", "))
+	}
+	if len(unflushed) > 0 {
+		problems = append(problems, "failed to flush the environment cache for: "+strings.Join(unflushed, ", "))
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// oweFlush records that env's server-side cache must be expired before this
+// node is fully converged. With no PuppetServer configured nothing is ever owed.
+func (a *Agent) oweFlush(env string) {
+	if a.cfg.PuppetServer == "" {
+		return
+	}
+	a.pendingFlush[env] = true
+}
+
+// flushPending expires every environment owed a flush, returning the ones still
+// owed afterwards, sorted.
+func (a *Agent) flushPending(ctx context.Context) []string {
+	if len(a.pendingFlush) == 0 {
+		return nil
+	}
+	var unflushed []string
+	for env := range a.pendingFlush {
+		if err := a.flushEnvironmentCache(ctx, env); err != nil {
+			a.cfg.Logger.Error("environment cache flush failed", "environment", env, "error", err)
+			unflushed = append(unflushed, env)
+			continue
+		}
+		delete(a.pendingFlush, env)
+		a.cfg.Logger.Info("environment cache flushed", "environment", env)
+	}
+	sort.Strings(unflushed)
+	return unflushed
+}
+
+// flushEnvironmentCache asks this node's OpenVox Server to expire one cached
+// environment, so its next catalog compile re-reads the tree the environment
+// symlink now points at.
+//
+// It expires one environment, not all of them: the others were not touched, and
+// dropping their caches would make every deploy re-parse the whole estate.
+// The request goes over the same client as the poll, carrying this node's own
+// Puppet certificate, which is what auth.conf on the server must admit.
+func (a *Agent) flushEnvironmentCache(ctx context.Context, env string) error {
+	ctx, cancel := context.WithTimeout(ctx, flushTimeout)
+	defer cancel()
+
+	target := a.cfg.PuppetServer + EnvironmentCachePath + "?environment=" + url.QueryEscape(env)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := a.cfg.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", target, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusForbidden:
+		// The shipped auth.conf denies this endpoint to everyone. Name the fix,
+		// because the status alone reads like a certificate problem.
+		return fmt.Errorf("DELETE %s: %s (auth.conf on this OpenVox Server must allow this node to reach %s)",
+			target, resp.Status, EnvironmentCachePath)
+	default:
+		return fmt.Errorf("DELETE %s: %s", target, resp.Status)
+	}
 }
 
 // reportServing re-states what this node serves, immediately after converging.
@@ -527,19 +636,20 @@ func (a *Agent) reapStaleExtractions() {
 // environments is far more likely misconfigured, or pointed at an empty basedir
 // directory, than deliberately deleting every environment at once. Deleting the
 // last environment stays a manual action.
-// It reports whether it removed anything, so the caller can re-state what this
-// node serves — a pruned environment leaves the set the agent reports.
-func (a *Agent) prune(want map[string]string) bool {
+// It returns the environments it removed, so the caller can re-state what this
+// node serves — a pruned environment leaves the set the agent reports — and
+// expire what OpenVox Server had cached for each.
+func (a *Agent) prune(want map[string]string) []string {
 	if len(want) == 0 {
 		a.cfg.Logger.Warn("publisher advertised no environments; skipping prune")
-		return false
+		return nil
 	}
 	local, err := a.localEnvironments()
 	if err != nil {
 		a.cfg.Logger.Warn("listing local environments failed; skipping prune", "error", err)
-		return false
+		return nil
 	}
-	var removed bool
+	var removed []string
 	for _, env := range local {
 		if _, kept := want[env]; kept {
 			continue
@@ -548,7 +658,7 @@ func (a *Agent) prune(want map[string]string) bool {
 			a.cfg.Logger.Warn("pruning environment failed", "environment", env, "error", err)
 			continue
 		}
-		removed = true
+		removed = append(removed, env)
 	}
 	return removed
 }

@@ -217,6 +217,14 @@ own certname, because that node already holds the basedir in plaintext on local
 disk — admitting it grants nothing, and requiring it to be written down would
 only be a step to forget. The allowlist below names the compilers you add later.
 
+Its own `puppetserver` is a different matter: the agent expires the environment
+cache there after every swap, and a primary's certificate usually carries no
+`pp_role`, so the `auth.conf` rule from [Wiring into
+puppetserver](commands.md#wiring-into-puppetserver) admits it by certname
+instead — `allow: ["puppet.example.com"]`. If the primary also serves compilers
+that flush *their own* servers, nothing here changes: each agent talks only to
+the server on its own node.
+
 It still has to name *something*: a publisher with an empty allowlist is refused
 at startup rather than coming up serving nobody. On a node that will never have
 compilers, `allow_roles: ['openvox_compiler']` satisfies that and authorizes no
@@ -393,13 +401,18 @@ step**. Bring each one up in this order:
 
 1. Install the package. It is inert — no unit is enabled, nothing is written to
    `puppetserver`'s config.
-2. Configure and start `codavox-agent`. Let it converge, so the environment
+2. Allow the agent to expire this server's environment cache: add the
+   `auth.conf` rule from [Wiring into
+   puppetserver](commands.md#wiring-into-puppetserver) and restart
+   `puppetserver`. On its own the rule changes nothing — no one is calling the
+   endpoint yet — so this is safe to do ahead of time.
+3. Configure and start `codavox-agent`. Let it converge, so the environment
    symlinks exist.
-3. Confirm with `codavox code-id production` on that node, and that it appears
+4. Confirm with `codavox code-id production` on that node, and that it appears
    in `codavox compilers` on the publisher.
-4. *Then* set `environmentpath` and `versioned-code.conf`, and restart
+5. *Then* set `environmentpath` and `versioned-code.conf`, and restart
    `puppetserver`.
-5. Compile a catalog against that compiler and confirm it works, **before**
+6. Compile a catalog against that compiler and confirm it works, **before**
    touching the next one.
 
 Reverse it by reverting those two settings; the compiler is back to stock.
@@ -467,7 +480,11 @@ journalctl -u codavox-agent -f
 ```
 
 The agent logs `environment updated` with the new `code_id` on every convergence,
-which is the line to grep when reconstructing when a node moved.
+which is the line to grep when reconstructing when a node moved, followed by
+`environment cache flushed` once the server has been told. An `environment cache
+flush failed` between them means catalogs are being compiled from the old tree
+under the new `code_id` until it succeeds; a `403` there is the `auth.conf` rule
+missing.
 
 ## Upgrades and version skew
 

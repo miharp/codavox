@@ -69,6 +69,14 @@
 #   # Remove environments the publisher no longer serves. Off by default;
 #   # deletion is destructive, so opt in. Needs r10k purge_levels set too.
 #   prune_environments: false
+#
+#   # After every swap, expire the environment in this node's OpenVox Server
+#   # cache, or a server with environment_timeout set keeps compiling the old
+#   # tree under the new code_id. auth.conf must allow this node to DELETE
+#   # /puppet-admin-api/v1/environment-cache; see docs/agent.md. Set false only
+#   # on a server running with environment_timeout = 0.
+#   puppetserver: https://<certname>:8140
+#   flush_environment_cache: true
 
 # --- deploy and deploy-server -------------------------------------------------
 

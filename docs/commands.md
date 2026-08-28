@@ -341,6 +341,34 @@ regardless — but with no `code-id-command` configured, it gets nothing back an
 the versioning is inert. Wiring the two commands above is what makes static
 catalogs actually do their job.
 
+**Let the agent expire the environment cache.** With `environment_timeout` set
+— and a production compiler sets it to `unlimited` — the server keeps compiling
+the tree it already parsed after the agent swaps the symlink, and stamps those
+catalogs with the new `code_id`. So after every swap the agent sends
+`DELETE /puppet-admin-api/v1/environment-cache?environment=<env>` to the server
+on this node, and the shipped `auth.conf` refuses that. Add this rule to
+`/etc/puppetlabs/puppetserver/conf.d/auth.conf` before wiring the commands:
+
+```hocon
+{
+    match-request: {
+        path: "/puppet-admin-api/v1/environment-cache"
+        type: path
+        method: delete
+    }
+    # pp_role, by OID — see below for why not by name.
+    allow: { extensions: { "1.3.6.1.4.1.34380.1.1.13": "openvox_compiler" } }
+    sort-order: 200
+    name: "codavox environment cache flush"
+}
+```
+
+The OID is `pp_role`; the short name does not resolve on a compiler, whose CA
+service is disabled. A node whose certificate has no `pp_role` is admitted by
+certname instead. See [Expiring the environment
+cache](agent.md#expiring-the-environment-cache) for the reasons, what happens
+when the flush fails, and when to turn it off.
+
 See [versioned-code-contract.md](versioned-code-contract.md) for the full
 verified interface.
 
