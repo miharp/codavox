@@ -67,7 +67,9 @@
 #   environmentpath: /opt/puppetlabs/codavox/environments
 #
 #   # Remove environments the publisher no longer serves. Off by default;
-#   # deletion is destructive, so opt in. Needs r10k purge_levels set too.
+#   # deletion is destructive, so opt in. r10k's default purge_levels already
+#   # removes the environment from the primary; keep `deployment` in it if
+#   # you override the list.
 #   prune_environments: false
 #
 #   # After every swap, expire the environment in this node's OpenVox Server
@@ -82,6 +84,11 @@
 
 # r10k:        /opt/puppetlabs/puppet/bin/r10k
 # r10k_config: /etc/puppetlabs/r10k/r10k.yaml
+#
+# Bound on one r10k run. Past it, r10k and everything it spawned are
+# terminated and the deploy fails, so a fetch from an unreachable remote
+# cannot hold the deploy lock forever.
+# r10k_timeout: 10m
 
 # deploy_server:
 #   listen: ":8170"

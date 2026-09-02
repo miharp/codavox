@@ -39,6 +39,9 @@ type Config struct {
 	EnvironmentPath string `yaml:"environmentpath"`
 	R10k            string `yaml:"r10k"`
 	R10kConfig      string `yaml:"r10k_config"`
+	// R10kTimeout bounds one r10k run, as a duration string; empty means the
+	// built-in default.
+	R10kTimeout string `yaml:"r10k_timeout"`
 
 	Publish struct {
 		Listen     string   `yaml:"listen"`

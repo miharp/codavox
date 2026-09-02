@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,7 +46,7 @@ func TestRunDeploysAndSeals(t *testing.T) {
 	r10k := writeFakeR10k(t, basedir, []string{"production"}, 0)
 	fakePublisher(t, state)
 
-	results, err := Run(Config{
+	results, err := Run(context.Background(), Config{
 		R10kPath: r10k,
 		BaseDir:  basedir,
 		StateDir: state,
@@ -81,7 +83,7 @@ func TestRunAllListsStagedEnvironments(t *testing.T) {
 	r10k := writeFakeR10k(t, basedir, []string{"production", "testing"}, 0)
 	fakePublisher(t, state)
 
-	results, err := Run(Config{
+	results, err := Run(context.Background(), Config{
 		R10kPath: r10k,
 		BaseDir:  basedir,
 		StateDir: state,
@@ -102,7 +104,7 @@ func TestRunSurfacesR10kFailure(t *testing.T) {
 	basedir := t.TempDir()
 	r10k := writeFakeR10k(t, basedir, []string{"production"}, 3)
 
-	if _, err := Run(Config{
+	if _, err := Run(context.Background(), Config{
 		R10kPath: r10k,
 		BaseDir:  basedir,
 		StateDir: t.TempDir(),
@@ -127,7 +129,7 @@ func TestRunRejectsBadArgs(t *testing.T) {
 		"invalid environment name":     {base, []string{"Bad Env!"}, false},
 	}
 	for name, c := range cases {
-		if _, err := Run(c.cfg, c.envs, c.all, false); err == nil {
+		if _, err := Run(context.Background(), c.cfg, c.envs, c.all, false); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
 		}
 	}
@@ -208,7 +210,7 @@ func TestConcurrentDeploysSerialize(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = Run(cfg, []string{"production"}, false, false)
+			_, errs[i] = Run(context.Background(), cfg, []string{"production"}, false, false)
 		}()
 	}
 	wg.Wait()
@@ -257,7 +259,7 @@ func TestRunFailsWhenThePublisherCannotBeSignalled(t *testing.T) {
 	r10k := writeFakeR10k(t, basedir, []string{"production"}, 0)
 
 	// No fakePublisher: nothing is listening for the SIGHUP.
-	results, err := Run(Config{
+	results, err := Run(context.Background(), Config{
 		R10kPath: r10k,
 		BaseDir:  basedir,
 		StateDir: t.TempDir(),
@@ -274,4 +276,125 @@ func TestRunFailsWhenThePublisherCannotBeSignalled(t *testing.T) {
 	if len(results) != 1 || results[0].CodeID == "" {
 		t.Errorf("results = %+v, want the sealed environment reported alongside the error", results)
 	}
+}
+
+// writeHangingR10k writes a stand-in r10k that never finishes on its own. It
+// backgrounds a sleep and records that child's pid, so a test can check that
+// terminating the deploy took the whole process group with it and not just the
+// shell codavox spawned.
+func writeHangingR10k(t *testing.T, childPidFile string) string {
+	t.Helper()
+	script := fmt.Sprintf(`#!/bin/sh
+sleep 60 &
+echo $! > %q
+wait
+`, childPidFile)
+	path := filepath.Join(t.TempDir(), "r10k")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	return path
+}
+
+// childPid waits for the fake r10k to record its child's pid and returns it.
+func childPid(t *testing.T, pidFile string) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b, err := os.ReadFile(pidFile) // #nosec G304 -- test temp file
+		if err == nil && strings.TrimSpace(string(b)) != "" {
+			pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+			if err != nil {
+				t.Fatalf("parsing child pid: %v", err)
+			}
+			return pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fake r10k never recorded its child pid")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// waitGone polls until pid no longer exists, or fails the test.
+func waitGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		// Signal 0 probes liveness; ESRCH means the process is gone. A
+		// reparented child is not ours to reap, so this is the observable.
+		if err := syscall.Kill(pid, 0); err != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("r10k's child %d survived the deploy being terminated", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A wedged r10k — a git fetch to an unreachable remote blocks indefinitely —
+// used to hold the basedir lock forever and queue every later deploy behind it
+// until someone found the process by hand. The timeout ends it, and ending it
+// means the whole process group: r10k forks git, git forks ssh, and a survivor
+// would keep writing the basedir under the next deploy.
+func TestRunTimesOutAndKillsR10kProcessGroup(t *testing.T) {
+	basedir := t.TempDir()
+	state := t.TempDir()
+	childPidFile := filepath.Join(t.TempDir(), "child.pid")
+	r10k := writeHangingR10k(t, childPidFile)
+	fakePublisher(t, state)
+
+	cfg := Config{
+		R10kPath:    r10k,
+		BaseDir:     basedir,
+		StateDir:    state,
+		R10kTimeout: time.Second,
+	}
+
+	start := time.Now()
+	_, err := Run(context.Background(), cfg, []string{"production"}, false, false)
+	if err == nil || !strings.Contains(err.Error(), "timed out after 1s") {
+		t.Fatalf("Run error = %v, want a timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Run took %s to give up on a hung r10k", elapsed)
+	}
+	waitGone(t, childPid(t, childPidFile))
+
+	// The lock must be free again: the next deploy — the one the operator runs
+	// to retry — must not wait behind the corpse of this one.
+	release, err := lockDeploy(state, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("basedir lock still held after a timed-out deploy: %v", err)
+	}
+	release()
+}
+
+// Ctrl-C at the terminal reaches codavox, and r10k lives in its own process
+// group so it no longer sees the signal itself. The context is how the
+// interrupt is forwarded, and it must end r10k the same way the timeout does.
+func TestRunCancelTerminatesR10k(t *testing.T) {
+	basedir := t.TempDir()
+	state := t.TempDir()
+	childPidFile := filepath.Join(t.TempDir(), "child.pid")
+	r10k := writeHangingR10k(t, childPidFile)
+	fakePublisher(t, state)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pid := make(chan int, 1)
+	go func() {
+		// Interrupt only once r10k is demonstrably running, or the cancel
+		// lands before Start and proves nothing about the process group.
+		pid <- childPid(t, childPidFile)
+		cancel()
+	}()
+	_, err := Run(ctx, Config{R10kPath: r10k, BaseDir: basedir, StateDir: state},
+		[]string{"production"}, false, false)
+	if err == nil || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("Run error = %v, want interrupted", err)
+	}
+	waitGone(t, <-pid)
 }

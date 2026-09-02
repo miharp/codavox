@@ -12,6 +12,7 @@
 package deploy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,18 @@ const DefaultWaitTimeout = 60 * time.Second
 // deploy runs while holding the lock, can itself take minutes.
 const DefaultLockTimeout = 10 * time.Minute
 
+// DefaultR10kTimeout bounds one r10k run. It is the guard against a wedged
+// deploy: r10k blocks on a git fetch to an unreachable remote indefinitely,
+// and while it does, the basedir lock is held and every later deploy — the
+// next webhook, the next CI job — queues behind it until someone finds the
+// process by hand. Ten minutes matches DefaultLockTimeout and PE's Code
+// Manager default; a large first deploy over a slow link may need more.
+const DefaultR10kTimeout = 10 * time.Minute
+
+// killGrace is how long a timed-out r10k gets to exit on SIGTERM before its
+// whole process group is killed.
+const killGrace = 10 * time.Second
+
 // fallbackR10k is the OpenVox package path, tried when r10k is not on PATH.
 const fallbackR10k = "/opt/puppetlabs/puppet/bin/r10k"
 
@@ -57,6 +70,9 @@ type Config struct {
 	StateDir string
 	// Modules resolves Puppetfile modules (r10k --puppetfile).
 	Modules bool
+	// R10kTimeout bounds the r10k run; zero uses DefaultR10kTimeout. On expiry
+	// r10k and everything it spawned are terminated and the deploy fails.
+	R10kTimeout time.Duration
 	// WaitTimeout bounds the Wait poll; zero uses DefaultWaitTimeout.
 	WaitTimeout time.Duration
 	// LockTimeout bounds how long Run waits to acquire the basedir lock behind
@@ -83,7 +99,9 @@ type Result struct {
 // wait — polls until the publisher has materialized the new artifact. The
 // returned error is non-nil if the deploy did not fully succeed; the results
 // are still returned so a caller can report per-environment status.
-func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
+//
+// Cancelling ctx terminates a running r10k, the same way the timeout does.
+func Run(ctx context.Context, cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	if cfg.BaseDir == "" {
 		return nil, errors.New("deploy needs a basedir directory")
 	}
@@ -122,7 +140,7 @@ func Run(cfg Config, envs []string, all, wait bool) ([]Result, error) {
 	}
 	defer release()
 
-	if err := runR10k(cfg, r10k, envs); err != nil {
+	if err := runR10k(ctx, cfg, r10k, envs); err != nil {
 		return nil, err
 	}
 
@@ -211,7 +229,15 @@ func resolveR10k(explicit string) (string, error) {
 	return "", fmt.Errorf("r10k not found on PATH or at %s; set --r10k", fallbackR10k)
 }
 
-func runR10k(cfg Config, r10k string, envs []string) error {
+// runR10k runs r10k under the configured timeout and the caller's context.
+//
+// r10k forks git, and git forks ssh. Killing r10k alone would leave those
+// running against the basedir with nobody waiting for them, and the next
+// deploy would then run r10k over a checkout still being written — the very
+// overlap the basedir lock exists to prevent. So r10k gets its own process
+// group and the group as a whole is signaled: SIGTERM first, then SIGKILL
+// after killGrace for anything that ignored it.
+func runR10k(ctx context.Context, cfg Config, r10k string, envs []string) error {
 	args := []string{"deploy", "environment"}
 	args = append(args, envs...) // empty for --all
 	if cfg.Modules {
@@ -221,12 +247,36 @@ func runR10k(cfg Config, r10k string, envs []string) error {
 		args = append(args, "--config", cfg.R10kConfig)
 	}
 
-	cmd := exec.Command(r10k, args...) // #nosec G204 -- r10k path and env names are validated inputs
+	timeout := cfg.R10kTimeout
+	if timeout <= 0 {
+		timeout = DefaultR10kTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, r10k, args...) // #nosec G204 -- r10k path and env names are validated inputs
 	// r10k logs to stderr; send everything there so deploy's own stdout stays
 	// reserved for results.
 	cmd.Stdout = stderr(cfg)
 	cmd.Stderr = stderr(cfg)
-	if err := cmd.Run(); err != nil {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = killGrace
+
+	err := cmd.Run()
+	if err != nil && cmd.Process != nil {
+		// Whatever survived SIGTERM and Go's SIGKILL of the leader — a git or
+		// ssh that trapped the first signal — goes with the group.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("r10k deploy timed out after %s", timeout)
+	case ctx.Err() != nil:
+		return errors.New("r10k deploy interrupted")
+	case err != nil:
 		return fmt.Errorf("r10k deploy failed: %w", err)
 	}
 	return nil

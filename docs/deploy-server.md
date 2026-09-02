@@ -30,6 +30,7 @@ is an alias that runs this command with only the webhook.
 | `--state` | `<root>/state` | Publisher state directory (to signal the reseal) |
 | `--r10k` | `r10k` on `PATH`, then `/opt/puppetlabs/puppet/bin/r10k` | r10k binary |
 | `--r10k-config` | r10k's default | r10k.yaml passed with `--config` |
+| `--r10k-timeout` | `10m` | Bound on each r10k run; past it, r10k is terminated and the deploy fails |
 | `--certname` | system hostname | Node's Puppet certname, for the server certificate |
 | `--ssldir` | `/etc/puppetlabs/puppet/ssl` | Puppet SSL directory |
 
@@ -137,6 +138,12 @@ The server runs one deploy at a time, and `internal/deploy` also takes a deploy
 lock (see [deploying.md](deploying.md#concurrent-deploys)), so an API deploy, a
 webhook deploy, and a `codavox deploy` on the command line never run r10k over
 each other.
+
+One deploy at a time means one hung r10k would stall the queue, so each run is
+bounded by `--r10k-timeout` (default ten minutes; see
+[deploying.md](deploying.md#when-r10k-hangs)). A deploy that hits it is recorded
+as `failed` with `"error": "r10k deploy timed out after 10m0s"`, r10k and
+everything it spawned are terminated, and the next queued deploy runs.
 
 ## Credentials
 
