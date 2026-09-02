@@ -34,19 +34,21 @@ estate.
 
 ```console
 # RPM: Rocky, RHEL, AlmaLinux, CentOS Stream
-curl -fsSL https://mikeharp.com/codavox/rpm/codavox.repo -o /etc/yum.repos.d/codavox.repo
+curl -fsSL https://packages.harpworks.org/rpm/harpworks.repo -o /etc/yum.repos.d/harpworks.repo
 dnf install codavox
 ```
 
 ```console
 # DEB: Debian, Ubuntu
-curl -fsSL https://mikeharp.com/codavox/codavox.asc -o /etc/apt/keyrings/codavox.asc
-echo "deb [signed-by=/etc/apt/keyrings/codavox.asc] https://mikeharp.com/codavox/deb stable main" > /etc/apt/sources.list.d/codavox.list
+curl -fsSL https://packages.harpworks.org/harpworks.asc -o /etc/apt/keyrings/harpworks.asc
+echo "deb [signed-by=/etc/apt/keyrings/harpworks.asc] https://packages.harpworks.org/deb stable main" > /etc/apt/sources.list.d/harpworks.list
 apt-get update && apt-get install codavox
 ```
 
-The repository serves `amd64` and `arm64` and is rebuilt from the
-[releases page](https://github.com/miharp/codavox/releases) on every release.
+The [harpworks repository](https://packages.harpworks.org) serves `amd64` and
+`arm64` and is rebuilt from the
+[releases page](https://github.com/miharp/codavox/releases) within the hour of
+a release.
 The package installs `/usr/bin/codavox` and the symlinks OpenVox Server invokes.
 See [installation.md](docs/installation.md) for what is signed, how to pin a
 version, and installing by URL on a host that cannot reach the repository. To

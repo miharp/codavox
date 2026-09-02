@@ -68,14 +68,14 @@ Add the package repository, then install:
 
 ```console
 # RPM: Rocky, RHEL, AlmaLinux, CentOS Stream
-curl -fsSL https://mikeharp.com/codavox/rpm/codavox.repo -o /etc/yum.repos.d/codavox.repo
+curl -fsSL https://packages.harpworks.org/rpm/harpworks.repo -o /etc/yum.repos.d/harpworks.repo
 dnf install codavox
 ```
 
 ```console
 # DEB: Debian, Ubuntu
-curl -fsSL https://mikeharp.com/codavox/codavox.asc -o /etc/apt/keyrings/codavox.asc
-echo "deb [signed-by=/etc/apt/keyrings/codavox.asc] https://mikeharp.com/codavox/deb stable main" > /etc/apt/sources.list.d/codavox.list
+curl -fsSL https://packages.harpworks.org/harpworks.asc -o /etc/apt/keyrings/harpworks.asc
+echo "deb [signed-by=/etc/apt/keyrings/harpworks.asc] https://packages.harpworks.org/deb stable main" > /etc/apt/sources.list.d/harpworks.list
 apt-get update && apt-get install codavox
 ```
 
@@ -84,17 +84,17 @@ host's. Pin a version with `dnf install codavox-0.8.0` or
 `apt-get install codavox=0.8.0`, and upgrade with the package manager as you
 would any other package.
 
-The repository is static files on GitHub Pages, rebuilt from the
-[releases page](https://github.com/miharp/codavox/releases) by the
-[Repository workflow](../.github/workflows/repository.yml) every time a release
-is published, so it carries every version ever released and nothing that is not
-a release. **What is signed is the repository metadata, not the packages**:
+The repository is [harpworks](https://packages.harpworks.org), which serves
+every tool published under that name; codavox is the first. It is static files
+on GitHub Pages, rebuilt from each project's releases page by
+[miharp/packages](https://github.com/miharp/packages) every hour and on demand,
+so it carries every version ever released and nothing that is not a release. **What is signed is the repository metadata, not the packages**:
 `repomd.xml` for dnf and `Release` for apt, each of which names every package's
 SHA-256. That is how apt has always worked, and dnf verifies it with
 `repo_gpgcheck`, which the `.repo` file turns on. It also means the packages in
 the repository are byte-for-byte the release assets, so `checksums.txt` on the
 releases page still describes them. The signing key is
-[`codavox.asc`](https://mikeharp.com/codavox/codavox.asc).
+[`harpworks.asc`](https://packages.harpworks.org/harpworks.asc).
 
 ### Installing by URL instead
 
