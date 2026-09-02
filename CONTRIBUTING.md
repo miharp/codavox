@@ -86,6 +86,31 @@ indefinitely, because the running agent never handshakes again. Version
 directories left at mode `0700` failed every catalog compile with `EACCES`.
 Neither is visible without a real server.
 
+### Cutting a release
+
+The Docker harness runs on every push to `main`, but it cannot stand in for the
+[lab](https://github.com/miharp/codavox-lab): real r10k, a real CA with a
+revoked compiler, a real puppetserver holding its environment cache. The lab
+pins a package, and for a long time that meant a release URL — so its audit
+suite could only run after a tag, and the first time it ran it found a release
+blocker in something already published.
+
+So a release is the last step, not the first:
+
+1. In the lab, `./scripts/use-snapshot` builds `main` with GoReleaser and
+   commits a pin to the snapshot; bring the VMs up fresh and run
+   `bash audit/run.sh`. The record it commits carries the snapshot's version
+   and the codavox commit it was built from.
+2. Bump `VERSION=` in [README.md](README.md) and
+   [docs/installation.md](docs/installation.md), and add an upgrade note to
+   [docs/production.md](docs/production.md) if the release asks anything of an
+   existing estate. The release workflow refuses a tag those files do not
+   document.
+3. Tag `vX.Y.Z` on `main` and push it. The workflow tests, packages, and
+   publishes the release.
+4. In the lab, `./scripts/use-release X.Y.Z` returns the pin to the published
+   package.
+
 ## Design rules
 
 Two rules are load-bearing. Changes that weaken either need a strong argument.
