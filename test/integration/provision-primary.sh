@@ -64,6 +64,39 @@ cat > "${BASEDIR}/production/environment.conf" <<'CONF'
 # Minimal environment seeded by the codavox integration harness.
 CONF
 
+# A control repo for the deploy path, initialized from the tree just seeded so
+# the first `codavox deploy` reproduces what the publisher already serves plus
+# one module. Local git remotes on purpose: r10k clones them like any other,
+# and the run needs no network to a forge or a git host. Nothing is deployed
+# here; the features drive that, so the seeded tree stays as it is until then.
+echo "[primary] creating a control repo and a module repo for r10k"
+git config --global user.email harness@codavox.invalid
+git config --global user.name  "codavox harness"
+git config --global init.defaultBranch production
+
+mkdir -p /srv/modules/apache /srv/control
+( cd /srv/modules/apache
+  mkdir -p manifests
+  printf 'class apache { notify { "apache from the harness module repo": } }\n' > manifests/init.pp
+  git init -q && git add -A && git commit -qm "apache 1" )
+
+( cd /srv/control
+  cp -r "${BASEDIR}/production/." .
+  cat > Puppetfile <<'PF'
+mod 'apache', git: '/srv/modules/apache', branch: 'production'
+PF
+  git init -q && git add -A && git commit -qm "control repo seeded from the harness tree" )
+
+install -d /etc/puppetlabs/r10k
+cat > /etc/puppetlabs/r10k/r10k.yaml <<'R10K'
+---
+cachedir: /var/cache/r10k
+sources:
+  control:
+    remote: /srv/control
+    basedir: /etc/puppetlabs/code/environments
+R10K
+
 echo "[primary] writing codavox config and secrets"
 mkdir -p /etc/codavox
 printf '%s' "$API_TOKEN"      > /etc/codavox/api.token

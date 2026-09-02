@@ -30,7 +30,7 @@ not a release.
 | `codavox-compiler` | OpenVox Server wired to codavox + `codavox agent`; doubles as its own puppet agent for the catalog check |
 
 Both are built from [`Dockerfile`](Dockerfile) (Rocky 9 + `openvox-server` +
-Java 21). Version directories live on a named volume rather than the container
+Java 21 + git and r10k, installed as the OpenVox guide does). Version directories live on a named volume rather than the container
 overlay filesystem: atomic symlink swap is a core correctness claim, and testing
 `rename(2)` semantics on overlayfs risks either false confidence or flakiness.
 
@@ -65,14 +65,35 @@ second compiler if you want that shape too.
 8. **Fleet view.** `codavox compilers` on the publisher reports what the
    compiler **says it is serving**, and that answer **equals the compiler's own
    `codavox-code-id`**. It then follows a deploy through to the new version.
-9. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
-   off its access to code** — with no restart of the publisher, and while the
-   certificate is still cryptographically valid and still carries its `pp_role`.
-   Runs last, because the compiler cannot fetch code afterwards.
+9. **Deploy.** `codavox deploy --wait` runs a **real r10k** against a control
+   repo the primary seeded from the served tree, seals the result, returns once
+   the publisher serves it, and the compiler converges on a tree that now
+   carries a Puppetfile module and an r10k deploy record — so the fleet view
+   reports a commit.
+10. **Module deploy.** `--modules apache` re-resolves one module and the
+    compiler serves the change. A short name that matches nothing in the
+    Puppetfile, which r10k deploys nothing for and exits 0, **fails the
+    deploy**; a long name (`puppetlabs/apache`) is refused with a hint before
+    r10k runs.
+11. **Hung r10k.** A stand-in r10k that never returns is **killed at
+    `--r10k-timeout`, its child with it**, the deploy fails naming the bound,
+    and the next deploy runs at once because the lock was released.
+12. **Extraction cap.** An artifact past `--max-unpacked` is **refused before
+    it lands**, with nothing installed, in a scratch root so the node's real
+    agent is untouched.
+13. **Branch deletion.** A branch added to the control repo becomes an
+    environment the compiler serves; deleting it and posting the deletion to
+    the webhook **deploys everything, r10k purges the directory, the publisher
+    stops advertising it, and the compiler prunes it**.
+14. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
+    off its access to code** — with no restart of the publisher, and while the
+    certificate is still cryptographically valid and still carries its `pp_role`.
+    Runs last, because the compiler cannot fetch code afterwards.
 
-Features 4, 8, and 9 are the three that **no Go test can replace**. The
+Features 4, 8, 13, and 14 are the four that **no Go test can replace**. The
 environment cache is puppetserver's, so only a real server can show it going
-stale and being expired. For the other two, every Go test drives `agent --once`
+stale and being expired. Feature 13 needs r10k's own purge and a compiler that
+polls for real. For the other two, every Go test drives `agent --once`
 — a fresh process and a fresh TLS connection per sync — whereas here the agent
 is a long-running daemon polling over one keep-alive connection. A report that
 only rode on the first request of a connection, or a CRL consulted only at
@@ -119,7 +140,7 @@ Two more things that mislead:
 | file | role |
 |---|---|
 | [`run.sh`](run.sh) | Orchestrator: builds the package, brings up the stack, provisions, runs the features, tears down |
-| [`provision-primary.sh`](provision-primary.sh) | Boots the CA, seeds an environment, starts the publisher + deploy server |
+| [`provision-primary.sh`](provision-primary.sh) | Boots the CA, seeds an environment, initializes a control repo and a module repo for r10k, starts the publisher + deploy server |
 | [`provision-compiler.sh`](provision-compiler.sh) | Enrolls a `pp_role=openvox_compiler` cert, allows the cache flush in `auth.conf`, converges the agent, wires OpenVox Server |
 | [`features.sh`](features.sh) | The end-to-end assertions above |
 | [`compose.yml`](compose.yml) / [`Dockerfile`](Dockerfile) | The self-contained two-node topology |

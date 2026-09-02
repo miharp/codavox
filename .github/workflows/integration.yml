@@ -20,15 +20,23 @@ on:
   # unverified, and how an agent bug reached main. Depending on someone
   # remembering to dispatch this by hand is not a control.
   #
-  # Deliberately not listing internal/**: the harness would then gate most
-  # pull requests, and CONTRIBUTING.md already asks for a local run when a
-  # change touches TLS or the agent's HTTP client.
+  # Not internal/** wholesale: the harness would then gate most pull requests,
+  # and CONTRIBUTING.md already asks for a local run when a change touches TLS
+  # or the agent's HTTP client. The deploy path and the agent are listed,
+  # though. Their behaviour against a real r10k and a real puppetserver — a
+  # module deploy, a hung r10k, an oversized artifact, a deleted branch — is
+  # what this harness exercises and no Go test can, and the first time those
+  # ran against anything real was in a lab after the release had shipped.
   pull_request:
     paths:
       - '.github/workflows/**'
       - '.goreleaser.yaml'
       - 'packaging/**'
       - 'test/integration/**'
+      - 'internal/deploy/**'
+      - 'internal/deployserver/**'
+      - 'internal/webhook/**'
+      - 'internal/agent/**'
 
 # One run per ref: superseded pushes to a pull request should not queue up
 # 30-minute jobs behind each other.

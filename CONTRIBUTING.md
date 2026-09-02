@@ -65,9 +65,11 @@ Requires Docker and [GoReleaser](https://goreleaser.com); takes a few minutes.
 See [test/integration/README.md](test/integration/README.md) for the topology,
 what each feature asserts, and how to debug a failed run.
 
-CI runs it for you on a pull request that changes a workflow, the packaging, or
-the harness itself — the paths where nothing else would exercise the change. It
-always runs on push to `main`.
+CI runs it for you on a pull request that changes a workflow, the packaging,
+the harness itself, or the deploy path and the agent (`internal/deploy`,
+`internal/deployserver`, `internal/webhook`, `internal/agent`) — the paths
+where nothing else exercises the change against a real r10k or a real
+puppetserver. It always runs on push to `main`.
 
 **Run it yourself before a pull request that touches TLS, the agent's HTTP
 client, packaging, or the systemd units.** Those are the areas where a change can pass

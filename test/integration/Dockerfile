@@ -16,5 +16,11 @@ ARG OVOX_MAJOR=8
 # OpenVox rejects). hostname is used by the provisioning scripts; curl is already
 # present as curl-minimal, and asking for curl conflicts with it.
 RUN rpm -Uvh --replacepkgs "https://yum.voxpupuli.org/openvox${OVOX_MAJOR}-release-el-9.noarch.rpm" \
- && dnf install -y -q openvox-server hostname java-21-openjdk-headless \
+ && dnf install -y -q openvox-server hostname java-21-openjdk-headless git \
  && dnf clean all
+
+# r10k, the way the OpenVox guide installs it, so the deploy path is exercised
+# against the real thing: a control repo, a Puppetfile, and r10k's own purge of
+# an environment whose branch is gone. A stand-in r10k would prove only what
+# the Go tests already prove.
+RUN /opt/puppetlabs/puppet/bin/gem install r10k --no-document
