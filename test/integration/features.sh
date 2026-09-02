@@ -150,9 +150,11 @@ else
 fi
 
 # The agent says what it did, in the journal — see README.md on why not
-# `docker logs`.
+# `docker logs`. Not `grep -q`: under pipefail it exits on the first match,
+# journalctl dies of SIGPIPE, and the pipeline reports the line absent. That
+# raced for a while and lost once the journal grew.
 if docker exec "$COMPILER" journalctl -u codavox-agent --no-pager 2>/dev/null \
-  | grep -q 'environment cache flushed'; then
+  | grep 'environment cache flushed' >/dev/null; then
   pass "the agent logged the flush"
 else
   fail "the agent never logged 'environment cache flushed'"
@@ -514,7 +516,7 @@ fi
 # journal, not `docker logs`: the publisher runs under systemd inside the
 # container, so its stderr goes to the journal while docker logs shows PID 1.
 if docker exec "$PRIMARY" journalctl -u codavox-publish --no-pager 2>/dev/null \
-  | grep -qi "revoked"; then
+  | grep -i "revoked" >/dev/null; then
   pass "the publisher logged the refusal"
 else
   fail "the publisher refused the compiler without saying it was revoked"
