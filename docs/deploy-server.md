@@ -72,6 +72,7 @@ bearer token.
 | `status` | `queued`, `running`, `complete`, or `failed` |
 | `source` | `api` or `webhook` |
 | `environments` | Environments deployed (filled from results for an `all` deploy) |
+| `reason` | Why the deploy was submitted when the request alone does not say, such as `branch for testing deleted` |
 | `submitted_at` / `started_at` / `finished_at` | Lifecycle timestamps |
 | `results` | Per-environment `code_id`, `commit`, and any `error` |
 | `error` | Set when the deploy failed |
@@ -99,8 +100,33 @@ caller can name the environment directly with `{"environment":"production"}`.
 
 A push is acknowledged `202` and deployed in the background: git providers time
 out in seconds but r10k does not. These are acknowledged `200` and deploy
-nothing: pings, non-push events, branch deletions (removing an environment is not
-yet supported), and tags or other non-branch refs.
+nothing: pings, non-push events, and tags or other non-branch refs.
+
+### Branch deletions
+
+Deleting a branch deploys **every** environment. The deleted branch leaves
+nothing to deploy by name, but its environment is still staged on the primary
+and still advertised to every compiler until r10k runs again: r10k removes an
+environment whose branch is gone only as part of a deploy, through its
+deployment-level purge, which is on by default. A full deploy is the run whose
+result reports the set that remains, so the deploy record shows what is left,
+with `reason` naming what was removed:
+
+```json
+{ "status": "complete", "source": "webhook", "all": true,
+  "reason": "branch for testing deleted",
+  "environments": ["production"], ... }
+```
+
+GitHub marks a deletion with `"deleted": true`, GitLab with an all-zero `after`
+sha, and a generic caller sends `{"environment":"testing","deleted":true}` or
+`"deleted": true` beside a `ref`.
+
+That removes the environment from the primary. Each compiler drops it only if
+its agent runs with
+[`--prune-environments`](agent.md#pruning-deleted-environments), which stays
+opt-in per node; see [deploying.md](deploying.md#deleting-environments) for
+both halves.
 
 GitHub's HMAC never puts the secret on the wire; GitLab and the generic form send
 it in a header, which is why TLS is on by default.

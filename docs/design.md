@@ -138,7 +138,8 @@ do not pay for it in source coupling.
 - **Environment deletion** propagating to compilers. *Addressed, opt-in:* with
   `--prune-environments`, an agent removes an environment the publisher no longer
   serves, guarded so a failed or empty poll never deletes. It relies on r10k
-  purging the removed environment from the basedir.
+  purging the removed environment from the basedir, which the webhook triggers
+  by deploying everything when a branch is deleted.
 - **puppetserver's environment cache** interacting with symlink swaps.
   *Solved:* after every swap the agent expires that environment through the
   server's own admin API (`DELETE /puppet-admin-api/v1/environment-cache`),

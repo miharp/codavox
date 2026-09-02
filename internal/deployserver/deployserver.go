@@ -37,16 +37,20 @@ const (
 
 // Record is one deploy, however it was triggered.
 type Record struct {
-	ID           string          `json:"id"`
-	Status       Status          `json:"status"`
-	Source       string          `json:"source"` // "api" or "webhook"
-	Environments []string        `json:"environments,omitempty"`
-	All          bool            `json:"all,omitempty"`
-	SubmittedAt  time.Time       `json:"submitted_at"`
-	StartedAt    *time.Time      `json:"started_at,omitempty"`
-	FinishedAt   *time.Time      `json:"finished_at,omitempty"`
-	Results      []deploy.Result `json:"results,omitempty"`
-	Error        string          `json:"error,omitempty"`
+	ID           string   `json:"id"`
+	Status       Status   `json:"status"`
+	Source       string   `json:"source"` // "api" or "webhook"
+	Environments []string `json:"environments,omitempty"`
+	All          bool     `json:"all,omitempty"`
+	// Reason says why a deploy was submitted when the request alone does not:
+	// a webhook that deploys everything because a branch was deleted, for
+	// instance. Empty for a deploy that asked for exactly what it got.
+	Reason      string          `json:"reason,omitempty"`
+	SubmittedAt time.Time       `json:"submitted_at"`
+	StartedAt   *time.Time      `json:"started_at,omitempty"`
+	FinishedAt  *time.Time      `json:"finished_at,omitempty"`
+	Results     []deploy.Result `json:"results,omitempty"`
+	Error       string          `json:"error,omitempty"`
 }
 
 // Deployer runs a deploy. The real implementation is Runner; tests substitute a
@@ -191,7 +195,7 @@ func (s *Server) process(id string) {
 // submit records a deploy and enqueues it. Enqueue and store happen under one
 // lock, so the worker — which must take the same lock — cannot observe the id
 // on the queue before its record exists.
-func (s *Server) submit(source string, envs []string, all bool) (Record, error) {
+func (s *Server) submit(source string, envs []string, all bool, reason string) (Record, error) {
 	id, err := newID()
 	if err != nil {
 		return Record{}, err
@@ -202,6 +206,7 @@ func (s *Server) submit(source string, envs []string, all bool) (Record, error) 
 		Source:       source,
 		Environments: envs,
 		All:          all,
+		Reason:       reason,
 		SubmittedAt:  time.Now().UTC(),
 	}
 
@@ -298,7 +303,7 @@ func (s *Server) handleCreateDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.submit("api", req.Environments, req.All)
+	rec, err := s.submit("api", req.Environments, req.All, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -345,22 +350,44 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	env, ignore, reason, err := webhook.Environment(r, body)
+	push, err := webhook.Parse(r, body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if ignore {
-		s.logger.Info("webhook ignored", "reason", reason)
+	if push.Ignore {
+		s.logger.Info("webhook ignored", "reason", push.Reason)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	rec, err := s.submit("webhook", []string{env}, false)
+
+	// A deleted branch leaves nothing to deploy by name, but its environment
+	// is still staged on the primary and still advertised to every compiler
+	// until r10k runs again: r10k removes an environment whose branch is gone
+	// only as part of a deploy (its deployment-level purge, on by default).
+	// Deploying everything is the run whose result reports the set that
+	// remains, which is what the deploy record should say after a removal.
+	// Compilers then drop the environment only if their agent prunes; that
+	// stays opt-in on each node.
+	envs := []string{push.Environment}
+	all := false
+	reason := ""
+	if push.Deleted {
+		envs, all = nil, true
+		reason = "branch for " + push.Environment + " deleted"
+	}
+	rec, err := s.submit("webhook", envs, all, reason)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	s.logger.Info("deploy queued", "id", rec.ID, "source", "webhook", "environment", env)
+	if push.Deleted {
+		s.logger.Info("deploy queued", "id", rec.ID, "source", "webhook",
+			"all", true, "deleted", push.Environment)
+	} else {
+		s.logger.Info("deploy queued", "id", rec.ID, "source", "webhook",
+			"environment", push.Environment)
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 

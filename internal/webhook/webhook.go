@@ -1,8 +1,9 @@
 // Package webhook parses and authenticates control-repo push notifications.
 //
 // It is a pure request mapper: given a push from GitHub, GitLab, or a generic
-// caller, it verifies the shared secret and reports which environment to
-// deploy. It does not deploy or hold state — the deploy server owns the queue,
+// caller, it verifies the shared secret and reports which environment the
+// push names and whether its branch was updated or deleted. It does not deploy
+// or hold state — the deploy server owns the queue,
 // the worker, and the history — so the whole parse-and-authenticate path is
 // testable on its own.
 package webhook
@@ -47,22 +48,35 @@ func Authenticate(secret []byte, r *http.Request, body []byte) error {
 	}
 }
 
-// Environment maps a push to the environment to deploy. ignore is true for
-// events that are valid but deploy nothing — pings, non-push events, branch
-// deletions, and non-branch refs — with reason describing why.
-func Environment(r *http.Request, body []byte) (env string, ignore bool, reason string, err error) {
+// Push is what a webhook payload asks for, once parsed.
+type Push struct {
+	// Environment is the environment the pushed branch maps to.
+	Environment string
+	// Deleted is true when the branch was removed rather than updated. The
+	// environment then names what is gone, and the caller decides how to purge
+	// it; this package only reports the event.
+	Deleted bool
+	// Ignore is true for events that are valid but deploy nothing — pings,
+	// non-push events, and non-branch refs — with Reason describing why.
+	Ignore bool
+	Reason string
+}
+
+// Parse maps a push to the environment it names and whether the branch was
+// updated or deleted.
+func Parse(r *http.Request, body []byte) (Push, error) {
 	ev, err := parseEvent(detectProvider(r), r, body)
 	if err != nil {
-		return "", false, "", err
+		return Push{}, err
 	}
 	if ev.ignore {
-		return "", true, ev.reason, nil
+		return Push{Ignore: true, Reason: ev.reason}, nil
 	}
-	env, err = environmentFromRef(ev.ref)
+	env, err := environmentFromRef(ev.ref)
 	if err != nil {
-		return "", false, "", err
+		return Push{}, err
 	}
-	return env, false, "", nil
+	return Push{Environment: env, Deleted: ev.deleted}, nil
 }
 
 func detectProvider(r *http.Request) string {
@@ -109,9 +123,10 @@ func secretEqual(a, b []byte) bool {
 }
 
 type event struct {
-	ref    string
-	ignore bool
-	reason string
+	ref     string
+	deleted bool
+	ignore  bool
+	reason  string
 }
 
 func parseEvent(provider string, r *http.Request, body []byte) (event, error) {
@@ -131,10 +146,7 @@ func parseEvent(provider string, r *http.Request, body []byte) (event, error) {
 		if err := json.Unmarshal(body, &p); err != nil {
 			return event{}, fmt.Errorf("parsing github payload: %w", err)
 		}
-		if p.Deleted {
-			return event{ignore: true, reason: "branch deleted"}, nil
-		}
-		return branchEvent(p.Ref), nil
+		return branchEvent(p.Ref, p.Deleted), nil
 
 	case "gitlab":
 		var p struct {
@@ -149,36 +161,35 @@ func parseEvent(provider string, r *http.Request, body []byte) (event, error) {
 			return event{ignore: true, reason: "non-push event " + p.ObjectKind}, nil
 		}
 		// A branch deletion sends an all-zero "after" sha.
-		if p.After != "" && strings.Trim(p.After, "0") == "" {
-			return event{ignore: true, reason: "branch deleted"}, nil
-		}
-		return branchEvent(p.Ref), nil
+		deleted := p.After != "" && strings.Trim(p.After, "0") == ""
+		return branchEvent(p.Ref, deleted), nil
 
 	default:
 		var p struct {
 			Ref         string `json:"ref"`
 			Environment string `json:"environment"`
+			Deleted     bool   `json:"deleted"`
 		}
 		if err := json.Unmarshal(body, &p); err != nil {
 			return event{}, fmt.Errorf("parsing payload: %w", err)
 		}
 		if p.Environment != "" {
-			return event{ref: "refs/heads/" + p.Environment}, nil
+			return event{ref: "refs/heads/" + p.Environment, deleted: p.Deleted}, nil
 		}
 		if p.Ref == "" {
 			return event{}, errors.New("payload has neither ref nor environment")
 		}
-		return branchEvent(p.Ref), nil
+		return branchEvent(p.Ref, p.Deleted), nil
 	}
 }
 
 // branchEvent ignores refs that are not branches: tags and other refs do not
-// name environments.
-func branchEvent(ref string) event {
+// name environments, so neither pushing nor deleting one changes any.
+func branchEvent(ref string, deleted bool) event {
 	if !strings.HasPrefix(ref, "refs/heads/") {
 		return event{ignore: true, reason: "non-branch ref " + ref}
 	}
-	return event{ref: ref}
+	return event{ref: ref, deleted: deleted}
 }
 
 var nonWord = regexp.MustCompile(`\W`)

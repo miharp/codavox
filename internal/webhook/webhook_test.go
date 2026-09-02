@@ -78,73 +78,104 @@ func TestAuthenticate(t *testing.T) {
 	}
 }
 
-func TestEnvironment(t *testing.T) {
+func TestParse(t *testing.T) {
 	tests := map[string]struct {
-		body       string
-		headers    map[string]string
-		wantEnv    string
-		wantIgnore bool
-		wantErr    bool
+		body        string
+		headers     map[string]string
+		wantEnv     string
+		wantDeleted bool
+		wantIgnore  bool
+		wantErr     bool
 	}{
 		"github branch": {
-			`{"ref":"refs/heads/production"}`,
-			map[string]string{"X-GitHub-Event": "push"},
-			"production", false, false,
+			body:    `{"ref":"refs/heads/production"}`,
+			headers: map[string]string{"X-GitHub-Event": "push"},
+			wantEnv: "production",
 		},
 		"github ping": {
-			`{"zen":"hi"}`,
-			map[string]string{"X-GitHub-Event": "ping"},
-			"", true, false,
+			body:       `{"zen":"hi"}`,
+			headers:    map[string]string{"X-GitHub-Event": "ping"},
+			wantIgnore: true,
 		},
 		"github branch delete": {
-			`{"ref":"refs/heads/production","deleted":true}`,
-			map[string]string{"X-GitHub-Event": "push"},
-			"", true, false,
+			body:        `{"ref":"refs/heads/testing","deleted":true}`,
+			headers:     map[string]string{"X-GitHub-Event": "push"},
+			wantEnv:     "testing",
+			wantDeleted: true,
 		},
 		"github tag ignored": {
-			`{"ref":"refs/tags/v1"}`,
-			map[string]string{"X-GitHub-Event": "push"},
-			"", true, false,
+			body:       `{"ref":"refs/tags/v1"}`,
+			headers:    map[string]string{"X-GitHub-Event": "push"},
+			wantIgnore: true,
+		},
+		"github tag delete ignored": {
+			body:       `{"ref":"refs/tags/v1","deleted":true}`,
+			headers:    map[string]string{"X-GitHub-Event": "push"},
+			wantIgnore: true,
 		},
 		"branch name sanitized": {
-			`{"ref":"refs/heads/feature/new-thing"}`,
-			map[string]string{"X-GitHub-Event": "push"},
-			"feature_new_thing", false, false,
+			body:    `{"ref":"refs/heads/feature/new-thing"}`,
+			headers: map[string]string{"X-GitHub-Event": "push"},
+			wantEnv: "feature_new_thing",
+		},
+		"deleted branch name sanitized": {
+			body:        `{"ref":"refs/heads/feature/new-thing","deleted":true}`,
+			headers:     map[string]string{"X-GitHub-Event": "push"},
+			wantEnv:     "feature_new_thing",
+			wantDeleted: true,
+		},
+		"gitlab push": {
+			body:    `{"ref":"refs/heads/production","object_kind":"push","after":"cafe1234"}`,
+			headers: map[string]string{"X-Gitlab-Event": "Push Hook"},
+			wantEnv: "production",
 		},
 		"gitlab delete via zero after": {
-			`{"ref":"refs/heads/production","object_kind":"push","after":"0000000000000000000000000000000000000000"}`,
-			map[string]string{"X-Gitlab-Event": "Push Hook"},
-			"", true, false,
+			body:        `{"ref":"refs/heads/testing","object_kind":"push","after":"0000000000000000000000000000000000000000"}`,
+			headers:     map[string]string{"X-Gitlab-Event": "Push Hook"},
+			wantEnv:     "testing",
+			wantDeleted: true,
 		},
 		"generic environment field": {
-			`{"environment":"testing"}`,
-			nil,
-			"testing", false, false,
+			body:    `{"environment":"testing"}`,
+			wantEnv: "testing",
+		},
+		"generic deleted": {
+			body:        `{"environment":"testing","deleted":true}`,
+			wantEnv:     "testing",
+			wantDeleted: true,
+		},
+		"generic ref deleted": {
+			body:        `{"ref":"refs/heads/testing","deleted":true}`,
+			wantEnv:     "testing",
+			wantDeleted: true,
 		},
 		"malformed body": {
-			`{ not json`,
-			map[string]string{"X-GitHub-Event": "push"},
-			"", false, true,
+			body:    `{ not json`,
+			headers: map[string]string{"X-GitHub-Event": "push"},
+			wantErr: true,
 		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			req, body := request(t, tc.body, tc.headers)
-			env, ignore, _, err := Environment(req, body)
+			push, err := Parse(req, body)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatal("Environment = nil error, want error")
+					t.Fatal("Parse = nil error, want error")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("Environment error = %v", err)
+				t.Fatalf("Parse error = %v", err)
 			}
-			if ignore != tc.wantIgnore {
-				t.Errorf("ignore = %v, want %v", ignore, tc.wantIgnore)
+			if push.Ignore != tc.wantIgnore {
+				t.Errorf("Ignore = %v, want %v", push.Ignore, tc.wantIgnore)
 			}
-			if env != tc.wantEnv {
-				t.Errorf("env = %q, want %q", env, tc.wantEnv)
+			if push.Environment != tc.wantEnv {
+				t.Errorf("Environment = %q, want %q", push.Environment, tc.wantEnv)
+			}
+			if push.Deleted != tc.wantDeleted {
+				t.Errorf("Deleted = %v, want %v", push.Deleted, tc.wantDeleted)
 			}
 		})
 	}

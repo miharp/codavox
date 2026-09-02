@@ -129,23 +129,36 @@ it.
 
 ## Deleting environments
 
-When a branch is removed from the control repo, its environment is deleted by
-letting r10k purge it from the basedir and letting each compiler's agent prune it.
+When a branch is removed from the control repo, its environment is deleted in
+two halves: r10k purges it from the basedir, and each compiler's agent prunes it.
 
-Configure r10k to purge removed environments — codavox does not do this, because
-`deploy` only observes r10k's output:
+r10k does the first half on its own. Its `deployment` purge level, on by
+default, removes any directory in the basedir that no source still manages, and
+it runs at the end of every deploy — a full one or a single named environment.
+codavox does not purge anything itself, because `deploy` only observes r10k's
+output; it just has to run r10k. The
+[webhook](deploy-server.md#branch-deletions) does so on a branch deletion by
+deploying every environment. From the command line, any deploy after the branch
+is gone has the same effect:
+
+```console
+codavox deploy --all
+```
+
+If you have overridden `purge_levels` in `r10k.yaml`, keep `deployment` in the
+list, or removed branches stay staged and advertised forever:
 
 ```yaml
 # r10k.yaml
 deploy:
-  purge_levels: [environment]
+  purge_levels: [deployment, puppetfile]   # r10k's default
 ```
 
-With that set, deleting a branch and redeploying removes the environment
-directory from the basedir, so `publish` stops advertising it. Each compiler running
-the agent with [`--prune-environments`](agent.md#pruning-deleted-environments)
-then removes it. Both halves are opt-in — codavox never deletes an operator's
-code by default.
+Once the directory is gone, `publish` stops advertising it. Each compiler
+running the agent with
+[`--prune-environments`](agent.md#pruning-deleted-environments) then removes
+it. That half is opt-in — codavox never deletes code from a compiler by
+default.
 
 ## Other ways to deploy
 
