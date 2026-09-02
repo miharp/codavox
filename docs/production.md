@@ -225,10 +225,11 @@ instead — `allow: ["puppet.example.com"]`. If the primary also serves compiler
 that flush *their own* servers, nothing here changes: each agent talks only to
 the server on its own node.
 
-It still has to name *something*: a publisher with an empty allowlist is refused
-at startup rather than coming up serving nobody. On a node that will never have
-compilers, `allow_roles: ['openvox_compiler']` satisfies that and authorizes no
-one, which is the accurate description of the estate.
+On a node that will never have compilers, leave the allowlist unset. The
+publisher then admits `openvox_compiler`, the role a compiler added later would
+carry, and itself; there is no need to write down a role nobody holds. What is
+refused at startup is an allowlist that is *explicitly* empty, so a publisher
+never comes up serving nobody by accident.
 
 ## Authorizing compilers
 
