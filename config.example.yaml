@@ -44,6 +44,11 @@ agent:
   interval:  30s
   keep:      3
   min_age:   2h
+  # Most one artifact may expand to on disk. An artifact past it is refused
+  # before it lands, so a wrong or compromised publisher cannot fill every
+  # compiler's disk with one small file. Raise it only for an environment
+  # that really carries that much; it cannot be turned off.
+  max_unpacked: 2G
   # Remove environments the publisher no longer serves. Off by default;
   # deletion is destructive, so opt in. r10k's default purge_levels already
   # removes the environment from the primary; keep `deployment` in it if you

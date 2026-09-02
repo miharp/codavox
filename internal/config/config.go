@@ -67,6 +67,10 @@ type Config struct {
 		Keep              int    `yaml:"keep"`
 		MinAge            string `yaml:"min_age"`
 		PruneEnvironments bool   `yaml:"prune_environments"`
+		// MaxUnpacked bounds how far one artifact may expand on disk, as a
+		// size with an optional K, M, or G suffix; empty means the built-in
+		// default.
+		MaxUnpacked string `yaml:"max_unpacked"`
 		// PuppetServer is the OpenVox Server on this node whose environment
 		// cache the agent flushes after a swap; empty means
 		// https://<certname>:8140.

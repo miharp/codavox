@@ -63,6 +63,7 @@ Usage:
   codavox agent --publisher <url> [--interval <dur>] [--once]
                 [--certname <name>] [--ssldir <dir>] [--environmentpath <dir>]
                 [--keep <n>] [--min-age <dur>] [--prune-environments]
+                [--max-unpacked <size>]
         Poll a publisher and converge this compiler onto the code it serves.
         With --prune-environments, also remove environments the publisher no
         longer serves.
@@ -521,6 +522,7 @@ func agentRun(args []string) error {
 		interval     time.Duration
 		keep         int
 		minAge       time.Duration
+		maxUnpacked  int64
 		once         bool
 		prune        bool
 	}{
@@ -553,6 +555,11 @@ func agentRun(args []string) error {
 	if cfg.Agent.Interval != "" {
 		if opts.interval, err = time.ParseDuration(cfg.Agent.Interval); err != nil {
 			return fmt.Errorf("config agent.interval: %w", err)
+		}
+	}
+	if cfg.Agent.MaxUnpacked != "" {
+		if opts.maxUnpacked, err = parseSize(cfg.Agent.MaxUnpacked); err != nil {
+			return fmt.Errorf("config agent.max_unpacked: %w", err)
 		}
 	}
 	if cfg.Agent.MinAge != "" {
@@ -604,6 +611,10 @@ func agentRun(args []string) error {
 			if v, err = next(); err == nil {
 				opts.keep, err = strconv.Atoi(v)
 			}
+		case "--max-unpacked":
+			if v, err = next(); err == nil {
+				opts.maxUnpacked, err = parseSize(v)
+			}
 		default:
 			return fmt.Errorf("unknown argument %q", args[i])
 		}
@@ -651,10 +662,11 @@ func agentRun(args []string) error {
 			Timeout:   30 * time.Minute, // environments can be large
 			Transport: &http.Transport{TLSClientConfig: tlsConfig},
 		},
-		Interval: opts.interval,
-		Keep:     opts.keep,
-		MinAge:   opts.minAge,
-		Prune:    opts.prune,
+		Interval:    opts.interval,
+		Keep:        opts.keep,
+		MinAge:      opts.minAge,
+		MaxUnpacked: opts.maxUnpacked,
+		Prune:       opts.prune,
 	})
 	if err != nil {
 		return err
@@ -1052,8 +1064,6 @@ func configPath(args []string) string {
 	return ""
 }
 
-// overlay sets *dst to v when v is non-empty. It applies a config value on top
-// of a built-in default, before flags are parsed.
 // r10kTimeoutFromConfig parses the file's r10k_timeout; empty means zero, which
 // deploy resolves to its built-in default.
 func r10kTimeoutFromConfig(cfg config.Config) (time.Duration, error) {
@@ -1067,6 +1077,29 @@ func r10kTimeoutFromConfig(cfg config.Config) (time.Duration, error) {
 	return d, nil
 }
 
+// parseSize reads a byte count with an optional K, M, G, or T suffix (binary
+// multiples; a trailing "i" or "iB" is accepted), e.g. 512M or 4GiB.
+func parseSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	num := strings.TrimRight(s, "kKmMgGtTiIbB")
+	unit := strings.ToUpper(strings.TrimSuffix(strings.TrimSuffix(strings.ToUpper(s[len(num):]), "B"), "I"))
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid size %q", s)
+	}
+	shift := map[string]uint{"": 0, "K": 10, "M": 20, "G": 30, "T": 40}
+	sh, ok := shift[unit]
+	if !ok {
+		return 0, fmt.Errorf("invalid size %q: use a number with an optional K, M, G, or T suffix", s)
+	}
+	if n > (1<<62)>>sh {
+		return 0, fmt.Errorf("size %q is out of range", s)
+	}
+	return n << sh, nil
+}
+
+// overlay sets *dst to v when v is non-empty. It applies a config value on top
+// of a built-in default, before flags are parsed.
 func overlay(dst *string, v string) {
 	if v != "" {
 		*dst = v

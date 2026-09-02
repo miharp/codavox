@@ -35,6 +35,11 @@ type Config struct {
 	Keep int
 	// MinAge is how long a superseded version is retained regardless of Keep.
 	MinAge time.Duration
+	// MaxUnpacked bounds how far one artifact may expand on disk, in bytes;
+	// zero is seal.DefaultMaxBytes. An artifact past it is refused before the
+	// byte that would cross it is written, so a publisher — compromised, or
+	// just wrong — cannot fill every compiler's disk with one small file.
+	MaxUnpacked int64
 	// Prune removes environments the publisher no longer advertises. It is off
 	// by default: deleting an environment is destructive, so an operator opts in.
 	Prune bool
@@ -449,7 +454,7 @@ func (a *Agent) download(ctx context.Context, env, codeID string) error {
 	// Removing tmp is a no-op once it has been renamed away.
 	defer func() { _ = os.RemoveAll(tmp) }()
 
-	if err := seal.ExtractArchive(resp.Body, tmp); err != nil {
+	if err := seal.ExtractArchiveWithin(resp.Body, tmp, seal.Limits{Bytes: a.cfg.MaxUnpacked}); err != nil {
 		return fmt.Errorf("extracting artifact: %w", err)
 	}
 

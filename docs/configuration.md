@@ -31,6 +31,7 @@ agent:
   interval:  30s
   keep:      3
   min_age:   2h
+  max_unpacked: 2G
   # The OpenVox Server on this node, whose environment cache the agent expires
   # after every swap. Defaults to https://<certname>:8140.
   puppetserver: https://compiler01.example.com:8140
@@ -90,6 +91,7 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | `agent.interval` | agent | `--interval` |
 | `agent.keep` | agent | `--keep` |
 | `agent.min_age` | agent | `--min-age` |
+| `agent.max_unpacked` | agent | `--max-unpacked` |
 | `agent.prune_environments` | agent | `--prune-environments` |
 | `agent.puppetserver` | agent | `--puppetserver` |
 | `agent.flush_environment_cache` | agent | `--flush-environment-cache` |

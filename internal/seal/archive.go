@@ -126,13 +126,61 @@ func writeEntry(tw *tar.Writer, root string, e Entry) error {
 	}
 }
 
-// ExtractArchive unpacks a gzipped tar produced by WriteArchive into dir.
+// Limits bounds what an extraction may write. A zero field takes its default.
+//
+// Each file is already bounded by its own declared size, but nothing bounded
+// the sum or the count. A gzip stream of zeros compresses about 1000:1, so a
+// megabyte of artifact could expand to gigabytes, and every compiler pulls the
+// same artifact at once. Verification by resealing catches a publisher that
+// serves the wrong tree, but only after the tree is on disk — too late for a
+// tree whose point is its size. These are the bound before the bytes land.
+type Limits struct {
+	// Bytes is the most file content an archive may expand to.
+	Bytes int64
+	// Entries is the most entries — files, directories, links — it may hold.
+	Entries int
+}
+
+// Default limits. Both are far above any Puppet code tree (a mid-sized control
+// repo is tens of megabytes and a few thousand files) and far below a full
+// disk, which is the whole ask of them.
+const (
+	DefaultMaxBytes   int64 = 2 << 30 // 2 GiB
+	DefaultMaxEntries       = 1 << 20 // roughly a million
+)
+
+func (l Limits) withDefaults() Limits {
+	if l.Bytes <= 0 {
+		l.Bytes = DefaultMaxBytes
+	}
+	if l.Entries <= 0 {
+		l.Entries = DefaultMaxEntries
+	}
+	return l
+}
+
+// budget is what an extraction in progress has left to spend.
+type budget struct {
+	limits  Limits
+	bytes   int64
+	entries int
+}
+
+// ExtractArchive unpacks a gzipped tar produced by WriteArchive into dir,
+// under the default Limits.
 //
 // Entry paths are confined to dir: an artifact is downloaded from the network,
 // so its contents are untrusted. A tar entry named "../../etc/passwd" or an
 // absolute path must not escape, and neither must a symlink whose target
 // points outside the tree.
 func ExtractArchive(r io.Reader, dir string) error {
+	return ExtractArchiveWithin(r, dir, Limits{})
+}
+
+// ExtractArchiveWithin unpacks a gzipped tar into dir, refusing an archive
+// that would expand past limits. The refusal is an error like any other here:
+// extraction stops, and the caller's temporary directory is discarded.
+func ExtractArchiveWithin(r io.Reader, dir string, limits Limits) error {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("opening gzip stream: %w", err)
@@ -150,6 +198,7 @@ func ExtractArchive(r io.Reader, dir string) error {
 	}
 	defer func() { _ = root.Close() }()
 
+	b := &budget{limits: limits.withDefaults()}
 	tr := tar.NewReader(zr)
 	for {
 		hdr, err := tr.Next()
@@ -159,17 +208,30 @@ func ExtractArchive(r io.Reader, dir string) error {
 		if err != nil {
 			return fmt.Errorf("reading archive: %w", err)
 		}
-		if err := extractEntry(root, dir, tr, hdr); err != nil {
+		if err := extractEntry(root, dir, tr, hdr, b); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractEntry(root *os.Root, dir string, tr *tar.Reader, hdr *tar.Header) error {
+func extractEntry(root *os.Root, dir string, tr *tar.Reader, hdr *tar.Header, b *budget) error {
 	name := filepath.Clean(hdr.Name)
 	if escapesTree(name) {
 		return fmt.Errorf("refusing archive entry with escaping path %q", hdr.Name)
+	}
+
+	// Charged before anything is written, so the limit is a bound on what
+	// reaches disk, not a discovery made after it did.
+	b.entries++
+	if b.entries > b.limits.Entries {
+		return fmt.Errorf("refusing archive with more than %d entries", b.limits.Entries)
+	}
+	if hdr.Typeflag == tar.TypeReg {
+		if hdr.Size < 0 || hdr.Size > b.limits.Bytes-b.bytes {
+			return fmt.Errorf("refusing archive that expands past %d bytes at %s", b.limits.Bytes, name)
+		}
+		b.bytes += hdr.Size
 	}
 
 	switch hdr.Typeflag {
