@@ -519,6 +519,32 @@ means module 0.4.0 first, which writes it. The rule is harmless to an older
 agent. Nothing about the artifact format or the `code_id` derivation changed, so
 no environment is re-downloaded.
 
+### Upgrading to 0.8
+
+Nothing about the artifact format or the `code_id` derivation changed, so no
+environment is re-downloaded. Three behaviors are new, and two of them can
+turn a working setup into a failing one if they are not looked at first:
+
+- **Every r10k run is bounded**, ten minutes by default. A deploy that
+  legitimately takes longer — a large first deploy over a slow link — now fails
+  with `r10k deploy timed out` instead of finishing. If yours do, set
+  `r10k_timeout` higher before upgrading the primary. See
+  [When r10k hangs](deploying.md#when-r10k-hangs).
+- **An artifact may expand to at most 2 GiB on a compiler.** An environment
+  larger than that is refused, and the compiler keeps serving its previous
+  version. If you have one, set `agent.max_unpacked` before upgrading agents.
+  See [Extraction is bounded](agent.md#extraction-is-bounded).
+- **A branch deletion received by the webhook now deploys every environment**,
+  so r10k purges the removed one; it used to be acknowledged and ignored. If
+  your `r10k.yaml` overrides `purge_levels`, keep `deployment` in the list. See
+  [Branch deletions](deploy-server.md#branch-deletions).
+
+Also new: `--modules` on `deploy` and `modules` on the deploy API re-resolve
+only the named Puppetfile modules, and deploy records carry `reason` and
+`modules`. [`puppet-codavox`](https://github.com/miharp/puppet-codavox) 0.5.0
+adds `r10k_timeout` and `agent_max_unpacked` as parameters; the 0.4.0 module
+keeps working unchanged.
+
 ## Backup and rebuild
 
 Almost nothing here is precious, by design:
