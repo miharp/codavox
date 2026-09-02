@@ -12,6 +12,7 @@ ssldir:   /etc/puppetlabs/puppet/ssl
 certname: puppet.example.com
 r10k:     /opt/puppetlabs/puppet/bin/r10k
 r10k_config: /etc/puppetlabs/r10k/r10k.yaml
+r10k_timeout: 10m
 
 publish:
   listen: ":8150"
@@ -76,6 +77,7 @@ only `CODAVOX_ROOT` and `CODAVOX_ENVIRONMENTPATH`.
 | `environmentpath` | agent | `--environmentpath` |
 | `r10k` | deploy, deploy-server | `--r10k` |
 | `r10k_config` | deploy, deploy-server | `--r10k-config` |
+| `r10k_timeout` | deploy, deploy-server | `--r10k-timeout` |
 | `publish.listen` | publish, compilers | `--listen` |
 | `publish.allow_roles` | publish | `--allow-role` |
 | `publish.allow_certnames` | publish | `--allow-certname` |

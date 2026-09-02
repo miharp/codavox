@@ -36,6 +36,7 @@ Code Manager runs r10k once and distributes the result.
 | `--no-modules` | | Skip Puppetfile module resolution (`r10k` without `--puppetfile`) |
 | `--r10k` | `r10k` on `PATH`, then `/opt/puppetlabs/puppet/bin/r10k` | r10k binary |
 | `--r10k-config` | r10k's own lookup | r10k.yaml passed with `--config` |
+| `--r10k-timeout` | `10m` | Bound on the r10k run; past it, r10k is terminated and the deploy fails |
 | `--basedir` | *required* | r10k's basedir, the same directory the publisher serves |
 | `--state` | `<root>/state` | Publisher state directory (pidfile and artifacts) |
 | `--json` | | Emit results as a JSON array |
@@ -83,6 +84,40 @@ production    deployed    a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0ad
 This is primary-side completion: the new version is sealed and servable. It does
 not wait for every compiler to converge — compilers poll and catch up on their
 own, and a stronger fleet-wide wait is a later feature.
+
+## When r10k hangs
+
+r10k blocks indefinitely on a git fetch to a remote that does not answer, and
+while it does, the deploy holds the basedir lock. Without a bound, every later
+deploy — the next push, the next CI job — queues behind it until someone finds
+the process by hand.
+
+So every r10k run is bounded, by `--r10k-timeout` or the `r10k_timeout`
+setting, default ten minutes. Past it, r10k is sent `SIGTERM`, then `SIGKILL`
+ten seconds later if it ignored that, and the deploy fails:
+
+```console
+$ codavox deploy production --r10k-timeout 2m
+codavox: r10k deploy timed out after 2m0s
+$ echo $?
+1
+```
+
+The signal goes to r10k's whole process group, not just r10k. r10k forks git,
+and git forks ssh; killing r10k alone would leave those writing the basedir
+with nobody waiting for them, and the next deploy would run r10k over a checkout
+still in progress — the overlap the lock exists to prevent. The lock is released
+as the deploy fails, so the retry does not wait.
+
+What is left is exactly what a crashed r10k leaves: the basedir wherever r10k
+got to, and nothing resealed, because the publisher is signaled only after r10k
+succeeds. The next successful deploy repairs it. If a large first deploy over a
+slow link legitimately needs longer, raise the bound; it is the same knob for
+`deploy` and the [deploy server](deploy-server.md).
+
+Interrupting `deploy` at the terminal ends r10k the same way. Because r10k runs
+in its own process group, `Ctrl-C` no longer reaches it directly; `deploy`
+forwards the interrupt instead.
 
 ## Triggering the reseal
 

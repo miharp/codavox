@@ -68,7 +68,7 @@ Usage:
         longer serves.
 
   codavox deploy <environment>... | --all [--wait] [--no-modules]
-                 [--r10k <path>] [--r10k-config <file>]
+                 [--r10k <path>] [--r10k-config <file>] [--r10k-timeout <dur>]
                  [--basedir <dir>] [--state <dir>] [--json]
         Run r10k to stage code, then trigger the publisher to reseal. Run this
         on the primary. With --wait, block until the new code_id is served.
@@ -76,7 +76,7 @@ Usage:
   codavox deploy-server [--api-token <file>] [--secret <file>]
                         [--listen <addr>] [--no-tls] [--history <n>]
                         --basedir <dir> [--state <dir>]
-                        [--r10k <path>] [--r10k-config <file>]
+                        [--r10k <path>] [--r10k-config <file>] [--r10k-timeout <dur>]
                         [--certname <name>] [--ssldir <dir>]
         Serve the deploy API and/or webhook on the primary. --api-token enables
         POST /v1/deploys and deploy status; --secret enables the push webhook.
@@ -680,15 +680,16 @@ func agentRun(args []string) error {
 // invocation and the reseal trigger.
 func deployRun(args []string) error {
 	opts := struct {
-		envs       []string
-		all        bool
-		wait       bool
-		noModules  bool
-		r10k       string
-		r10kConfig string
-		basedir    string
-		state      string
-		asJSON     bool
+		envs        []string
+		all         bool
+		wait        bool
+		noModules   bool
+		r10k        string
+		r10kConfig  string
+		r10kTimeout time.Duration
+		basedir     string
+		state       string
+		asJSON      bool
 	}{
 		state: defaultStateDir(),
 	}
@@ -701,6 +702,9 @@ func deployRun(args []string) error {
 	overlay(&opts.state, cfg.State)
 	overlay(&opts.r10k, cfg.R10k)
 	overlay(&opts.r10kConfig, cfg.R10kConfig)
+	if opts.r10kTimeout, err = r10kTimeoutFromConfig(cfg); err != nil {
+		return err
+	}
 
 	for i := 0; i < len(args); i++ {
 		next := func() (string, error) {
@@ -726,6 +730,11 @@ func deployRun(args []string) error {
 			opts.r10k, err = next()
 		case "--r10k-config":
 			opts.r10kConfig, err = next()
+		case "--r10k-timeout":
+			var v string
+			if v, err = next(); err == nil {
+				opts.r10kTimeout, err = time.ParseDuration(v)
+			}
 		case "--basedir":
 			opts.basedir, err = next()
 		case "--state":
@@ -745,12 +754,18 @@ func deployRun(args []string) error {
 		return fmt.Errorf("deploy needs --basedir <dir> (r10k's basedir, the same the publisher serves)")
 	}
 
-	results, runErr := deploy.Run(deploy.Config{
-		R10kPath:   opts.r10k,
-		R10kConfig: opts.r10kConfig,
-		BaseDir:    opts.basedir,
-		StateDir:   opts.state,
-		Modules:    !opts.noModules,
+	// r10k runs in its own process group, so an interrupt at the terminal no
+	// longer reaches it by itself; forward it through the context instead.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	results, runErr := deploy.Run(ctx, deploy.Config{
+		R10kPath:    opts.r10k,
+		R10kConfig:  opts.r10kConfig,
+		R10kTimeout: opts.r10kTimeout,
+		BaseDir:     opts.basedir,
+		StateDir:    opts.state,
+		Modules:     !opts.noModules,
 	}, opts.envs, opts.all, opts.wait)
 
 	if err := printDeployResults(results, opts.wait, opts.asJSON); err != nil {
@@ -810,6 +825,7 @@ func deployServer(args []string) error {
 		state        string
 		r10k         string
 		r10kConfig   string
+		r10kTimeout  time.Duration
 		certname     string
 		ssldir       string
 		history      int
@@ -831,6 +847,9 @@ func deployServer(args []string) error {
 	overlay(&opts.state, cfg.State)
 	overlay(&opts.r10k, cfg.R10k)
 	overlay(&opts.r10kConfig, cfg.R10kConfig)
+	if opts.r10kTimeout, err = r10kTimeoutFromConfig(cfg); err != nil {
+		return err
+	}
 	overlay(&opts.certname, cfg.Certname)
 	overlay(&opts.ssldir, cfg.SSLDir)
 	if cfg.DeployServer.History > 0 {
@@ -866,6 +885,10 @@ func deployServer(args []string) error {
 			opts.r10k, err = next()
 		case "--r10k-config":
 			opts.r10kConfig, err = next()
+		case "--r10k-timeout":
+			if v, err = next(); err == nil {
+				opts.r10kTimeout, err = time.ParseDuration(v)
+			}
 		case "--certname":
 			opts.certname, err = next()
 		case "--ssldir":
@@ -900,11 +923,12 @@ func deployServer(args []string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	srv := deployserver.New(deployserver.Config{
 		Deployer: deployserver.Runner{Config: deploy.Config{
-			R10kPath:   opts.r10k,
-			R10kConfig: opts.r10kConfig,
-			BaseDir:    opts.basedir,
-			StateDir:   opts.state,
-			Modules:    true,
+			R10kPath:    opts.r10k,
+			R10kConfig:  opts.r10kConfig,
+			R10kTimeout: opts.r10kTimeout,
+			BaseDir:     opts.basedir,
+			StateDir:    opts.state,
+			Modules:     true,
 		}},
 		APIToken:   apiToken,
 		Secret:     secret,
@@ -1011,6 +1035,19 @@ func configPath(args []string) string {
 
 // overlay sets *dst to v when v is non-empty. It applies a config value on top
 // of a built-in default, before flags are parsed.
+// r10kTimeoutFromConfig parses the file's r10k_timeout; empty means zero, which
+// deploy resolves to its built-in default.
+func r10kTimeoutFromConfig(cfg config.Config) (time.Duration, error) {
+	if cfg.R10kTimeout == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(cfg.R10kTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("config r10k_timeout: %w", err)
+	}
+	return d, nil
+}
+
 func overlay(dst *string, v string) {
 	if v != "" {
 		*dst = v

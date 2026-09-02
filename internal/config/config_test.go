@@ -24,6 +24,7 @@ ssldir: /etc/puppetlabs/puppet/ssl
 certname: primary.example.com
 r10k: /opt/puppetlabs/puppet/bin/r10k
 r10k_config: /etc/puppetlabs/r10k/r10k.yaml
+r10k_timeout: 20m
 publish:
   listen: ":8150"
   allow_roles: [openvox_compiler, deployer]
@@ -47,6 +48,9 @@ agent:
 	}
 	if c.Certname != "primary.example.com" {
 		t.Errorf("certname = %q", c.Certname)
+	}
+	if c.R10kTimeout != "20m" {
+		t.Errorf("r10k_timeout = %q", c.R10kTimeout)
 	}
 	if c.Publish.Listen != ":8150" || len(c.Publish.AllowRoles) != 2 {
 		t.Errorf("publish = %+v", c.Publish)

@@ -68,7 +68,10 @@ type Runner struct {
 // the record is complete once the deploy has landed on the primary, and
 // compilers converge on their own by polling.
 func (r Runner) Deploy(envs []string, all bool) ([]deploy.Result, error) {
-	return deploy.Run(r.Config, envs, all, false)
+	// Background rather than the server's context: a deploy that has started
+	// r10k should finish or hit its own timeout, not be torn down mid-checkout
+	// because the daemon was asked to stop. The timeout bounds it either way.
+	return deploy.Run(context.Background(), r.Config, envs, all, false)
 }
 
 // Config configures a Server.
