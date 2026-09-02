@@ -37,6 +37,7 @@ agent:
   interval: 45s
   keep: 5
   min_age: 3h
+  max_unpacked: 4G
 `)
 
 	c, err := Load(path)
@@ -60,6 +61,9 @@ agent:
 	}
 	if c.Agent.Publisher != "https://puppet.example.com:8150" || c.Agent.Interval != "45s" || c.Agent.Keep != 5 || c.Agent.MinAge != "3h" {
 		t.Errorf("agent = %+v", c.Agent)
+	}
+	if c.Agent.MaxUnpacked != "4G" {
+		t.Errorf("agent.max_unpacked = %q", c.Agent.MaxUnpacked)
 	}
 }
 

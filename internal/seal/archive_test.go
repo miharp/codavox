@@ -4,10 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -369,5 +371,87 @@ func TestExtractNormalizesModes(t *testing.T) {
 		if perm := mode.Perm(); perm != 0o644 && perm != 0o755 {
 			t.Errorf("%s extracted with mode %o, want 0644 or 0755", name, perm)
 		}
+	}
+}
+
+// fixedArchive builds a gzipped tar of n regular files of size bytes each.
+func fixedArchive(t *testing.T, n int, size int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	body := bytes.Repeat([]byte{0}, size)
+	for i := range n {
+		hdr := &tar.Header{Name: fmt.Sprintf("f%04d", i), Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(size)}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func countFiles(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
+}
+
+// The per-file bound was never the problem; the sum was. Each file is bounded
+// by its declared size, so a compromised publisher could fill a disk with a
+// small artifact of many honest-sized files, or one gzip of zeros. The total
+// is refused before the byte that would cross it is written, so what reaches
+// disk stays under the limit.
+func TestExtractRefusesArchiveExpandingPastByteLimit(t *testing.T) {
+	data := fixedArchive(t, 4, 100)
+	dst := t.TempDir()
+
+	err := ExtractArchiveWithin(bytes.NewReader(data), dst, Limits{Bytes: 250})
+	if err == nil || !strings.Contains(err.Error(), "expands past 250 bytes at f0002") {
+		t.Fatalf("err = %v, want a refusal at the third file", err)
+	}
+	if n := countFiles(t, dst); n != 2 {
+		t.Errorf("%d files on disk after the refusal, want the 2 that fit", n)
+	}
+
+	// Exactly at the limit is fine: the bound is on the sum, inclusive.
+	if err := ExtractArchiveWithin(bytes.NewReader(fixedArchive(t, 2, 100)), t.TempDir(), Limits{Bytes: 200}); err != nil {
+		t.Errorf("an archive exactly at the limit was refused: %v", err)
+	}
+}
+
+func TestExtractRefusesArchiveWithTooManyEntries(t *testing.T) {
+	data := fixedArchive(t, 5, 1)
+	dst := t.TempDir()
+
+	err := ExtractArchiveWithin(bytes.NewReader(data), dst, Limits{Entries: 3})
+	if err == nil || !strings.Contains(err.Error(), "more than 3 entries") {
+		t.Fatalf("err = %v, want a refusal on the fourth entry", err)
+	}
+	if n := countFiles(t, dst); n != 3 {
+		t.Errorf("%d files on disk after the refusal, want 3", n)
+	}
+}
+
+// A zero limit means the default, never "no limit": there is no way to turn
+// the bound off, only to raise it.
+func TestExtractZeroLimitsAreDefaults(t *testing.T) {
+	l := Limits{}.withDefaults()
+	if l.Bytes != DefaultMaxBytes || l.Entries != DefaultMaxEntries {
+		t.Errorf("withDefaults = %+v", l)
+	}
+	if err := ExtractArchiveWithin(bytes.NewReader(fixedArchive(t, 3, 10)), t.TempDir(), Limits{}); err != nil {
+		t.Errorf("default limits refused a tiny archive: %v", err)
 	}
 }

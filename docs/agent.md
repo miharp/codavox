@@ -26,6 +26,7 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 | `--environmentpath` | `/opt/puppetlabs/codavox/environments` | Where environment links live |
 | `--keep` | `3` | Superseded versions retained per environment |
 | `--min-age` | `2h` | Minimum retention regardless of `--keep` |
+| `--max-unpacked` | `2G` | Most one artifact may expand to on disk; past it, the artifact is refused |
 | `--prune-environments` | off | Remove environments the publisher no longer serves |
 | `--puppetserver` | `https://<certname>:8140` | The OpenVox Server on this node whose environment cache to expire |
 | `--flush-environment-cache` | `true` | Expire the environment in that server's cache after every swap |
@@ -108,6 +109,32 @@ dies mid-extraction is covered under [Reaping](#reaping).
 The body is a gzipped tar (`Content-Type: application/gzip`). That gzip is the
 archive format itself, produced once at seal time — not an HTTP
 `Content-Encoding` the transport adds on top.
+
+## Extraction is bounded
+
+Every file in an artifact is bounded by its own declared size, but the sum is
+what fills a disk. A gzip stream of zeros compresses about 1000:1, so a
+megabyte of artifact could expand to gigabytes, and every compiler pulls the
+same artifact at once — so a publisher serving such a thing, compromised or
+merely wrong, would fill the whole fleet's disks in one poll.
+[Verification](#verification-is-by-resealing-not-by-checksum) would refuse
+the tree, but only after it was on disk, which is too late for a tree whose
+point is its size.
+
+So extraction refuses, before writing the byte that would cross it, any
+artifact that expands past `--max-unpacked` (default `2G`) or past a million
+entries:
+
+```text
+level=ERROR msg="sync failed" environment=production error="extracting artifact: refusing archive that expands past 2147483648 bytes at modules/big/files/blob"
+```
+
+The refusal is a failed sync like any other: the temporary directory is
+discarded, the environment keeps serving its previous version, and the agent
+tries again next poll. There is no way to turn the bound off, only to raise
+it, and the default is far above any Puppet code tree — a mid-sized control
+repo is tens of megabytes — while staying far below a disk. Raise it only for
+an environment that really carries that much.
 
 ## Verification is by resealing, not by checksum
 

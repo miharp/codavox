@@ -62,6 +62,11 @@
 #   keep:     3
 #   min_age:  2h
 #
+#   # Most one artifact may expand to on disk. Past it the artifact is
+#   # refused before it lands, so a wrong or compromised publisher cannot
+#   # fill every compiler's disk with one small file.
+#   max_unpacked: 2G
+#
 #   # OpenVox Server's environmentpath. codavox owns this directory and puts
 #   # only symlinks in it, deliberately not the stock code/environments.
 #   environmentpath: /opt/puppetlabs/codavox/environments
