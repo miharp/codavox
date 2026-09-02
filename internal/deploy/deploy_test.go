@@ -51,7 +51,7 @@ func TestRunDeploysAndSeals(t *testing.T) {
 		BaseDir:  basedir,
 		StateDir: state,
 		Modules:  true,
-	}, []string{"production"}, false, false)
+	}, Request{Environments: []string{"production"}})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestRunAllListsStagedEnvironments(t *testing.T) {
 		R10kPath: r10k,
 		BaseDir:  basedir,
 		StateDir: state,
-	}, nil, true, false)
+	}, Request{All: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRunSurfacesR10kFailure(t *testing.T) {
 		R10kPath: r10k,
 		BaseDir:  basedir,
 		StateDir: t.TempDir(),
-	}, []string{"production"}, false, false); err == nil {
+	}, Request{Environments: []string{"production"}}); err == nil {
 		t.Fatal("expected an error when r10k exits non-zero")
 	}
 }
@@ -129,7 +129,7 @@ func TestRunRejectsBadArgs(t *testing.T) {
 		"invalid environment name":     {base, []string{"Bad Env!"}, false},
 	}
 	for name, c := range cases {
-		if _, err := Run(context.Background(), c.cfg, c.envs, c.all, false); err == nil {
+		if _, err := Run(context.Background(), c.cfg, Request{Environments: c.envs, All: c.all}); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
 		}
 	}
@@ -210,7 +210,7 @@ func TestConcurrentDeploysSerialize(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = Run(context.Background(), cfg, []string{"production"}, false, false)
+			_, errs[i] = Run(context.Background(), cfg, Request{Environments: []string{"production"}})
 		}()
 	}
 	wg.Wait()
@@ -263,7 +263,7 @@ func TestRunFailsWhenThePublisherCannotBeSignalled(t *testing.T) {
 		R10kPath: r10k,
 		BaseDir:  basedir,
 		StateDir: t.TempDir(),
-	}, []string{"production"}, false, false)
+	}, Request{Environments: []string{"production"}})
 
 	if err == nil {
 		t.Fatal("a deploy nothing will serve reported success")
@@ -354,7 +354,7 @@ func TestRunTimesOutAndKillsR10kProcessGroup(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := Run(context.Background(), cfg, []string{"production"}, false, false)
+	_, err := Run(context.Background(), cfg, Request{Environments: []string{"production"}})
 	if err == nil || !strings.Contains(err.Error(), "timed out after 1s") {
 		t.Fatalf("Run error = %v, want a timeout", err)
 	}
@@ -392,9 +392,113 @@ func TestRunCancelTerminatesR10k(t *testing.T) {
 		cancel()
 	}()
 	_, err := Run(ctx, Config{R10kPath: r10k, BaseDir: basedir, StateDir: state},
-		[]string{"production"}, false, false)
+		Request{Environments: []string{"production"}})
 	if err == nil || !strings.Contains(err.Error(), "interrupted") {
 		t.Fatalf("Run error = %v, want interrupted", err)
 	}
 	waitGone(t, <-pid)
+}
+
+// writeModuleR10k writes a stand-in r10k that records its arguments, one per
+// line, and stages production with the given module directories present.
+func writeModuleR10k(t *testing.T, basedir, argsFile string, modules []string) string {
+	t.Helper()
+	envDir := filepath.Join(basedir, "production")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" >> %q\n", argsFile)
+	script += fmt.Sprintf("mkdir -p %q\n", filepath.Join(envDir, "manifests"))
+	script += fmt.Sprintf("printf 'node default { }\\n' > %q\n", filepath.Join(envDir, "manifests", "site.pp"))
+	script += fmt.Sprintf("printf '{\"name\":\"production\",\"signature\":\"abc\"}' > %q\n",
+		filepath.Join(envDir, ".r10k-deploy.json"))
+	for _, m := range modules {
+		script += fmt.Sprintf("mkdir -p %q\n", filepath.Join(envDir, "modules", m))
+	}
+	path := filepath.Join(t.TempDir(), "r10k")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { // #nosec G306
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A module deploy maps onto r10k's own `deploy module -e <env> <names>`,
+// which touches the named modules and nothing else — the same shape as Code
+// Manager's `modules` parameter.
+func TestRunModulesInvokesR10kDeployModule(t *testing.T) {
+	basedir := t.TempDir()
+	state := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	r10k := writeModuleR10k(t, basedir, argsFile, []string{"apache", "nginx"})
+	fakePublisher(t, state)
+
+	results, err := Run(context.Background(), Config{
+		R10kPath:   r10k,
+		R10kConfig: "/etc/r10k.yaml",
+		BaseDir:    basedir,
+		StateDir:   state,
+		Modules:    true,
+	}, Request{Environments: []string{"production"}, Modules: []string{"apache", "nginx"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 1 || results[0].CodeID == "" || results[0].Commit != "abc" {
+		t.Errorf("results = %+v, want production sealed with its commit", results)
+	}
+
+	got, _ := os.ReadFile(argsFile) // #nosec G304 -- test temp file
+	want := "deploy\nmodule\n-e\nproduction\napache\nnginx\n--config\n/etc/r10k.yaml\n"
+	if string(got) != want {
+		t.Errorf("r10k argv:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// r10k deploys nothing and exits 0 for a module name that matches nothing in
+// the Puppetfile. Reporting that as a successful deploy would print a code_id
+// beside "deployed" for a deploy that changed nothing.
+func TestRunModulesMissingAfterDeployIsAnError(t *testing.T) {
+	basedir := t.TempDir()
+	state := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args")
+	r10k := writeModuleR10k(t, basedir, argsFile, []string{"apache"})
+	fakePublisher(t, state)
+
+	results, err := Run(context.Background(), Config{R10kPath: r10k, BaseDir: basedir, StateDir: state},
+		Request{Environments: []string{"production"}, Modules: []string{"apache", "nginxx"}})
+	if err == nil {
+		t.Fatal("Run = nil error, want the missing module reported")
+	}
+	if len(results) != 1 || !strings.Contains(results[0].Err, "nginxx") || strings.Contains(results[0].Err, "apache,") {
+		t.Errorf("results = %+v, want only nginxx reported missing", results)
+	}
+	if results[0].CodeID == "" {
+		t.Error("the environment should still be sealed and reported")
+	}
+}
+
+// The Puppetfile's moduledir moves where r10k installs modules, so the
+// post-deploy check has to follow it or every module deploy into such an
+// environment would be reported missing.
+func TestMissingModulesHonorsModuledir(t *testing.T) {
+	envDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(envDir, "Puppetfile"),
+		[]byte("forge 'https://forge.example'\nmoduledir 'site-modules'\nmod 'apache'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(envDir, "site-modules", "apache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if missing := missingModules(envDir, []string{"apache", "nginx"}); len(missing) != 1 || missing[0] != "nginx" {
+		t.Errorf("missing = %v, want [nginx]", missing)
+	}
+}
+
+func TestValidateModule(t *testing.T) {
+	for _, ok := range []string{"apache", "my_mod2", "a"} {
+		if err := ValidateModule(ok); err != nil {
+			t.Errorf("%q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"puppetlabs/apache", "puppetlabs-apache", "Apache", "2fa", "", "a b"} {
+		if err := ValidateModule(bad); err == nil {
+			t.Errorf("%q accepted, want an error", bad)
+		}
+	}
 }

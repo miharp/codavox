@@ -26,19 +26,18 @@ const (
 // fakeDeployer records what it was asked to deploy and returns canned results.
 type fakeDeployer struct {
 	mu    sync.Mutex
-	calls [][]string
-	alls  []bool
+	calls []deploy.Request
 	err   error
 }
 
-func (f *fakeDeployer) Deploy(envs []string, all bool) ([]deploy.Result, error) {
+func (f *fakeDeployer) Deploy(req deploy.Request) ([]deploy.Result, error) {
 	f.mu.Lock()
-	f.calls = append(f.calls, envs)
-	f.alls = append(f.alls, all)
+	f.calls = append(f.calls, req)
 	f.mu.Unlock()
 
 	// Simulate --all resolving to a fixed set the caller did not name.
-	if all {
+	envs := req.Environments
+	if req.All {
 		envs = []string{"production", "testing"}
 	}
 	res := make([]deploy.Result, 0, len(envs))
@@ -118,6 +117,35 @@ func TestCreateDeployAsync(t *testing.T) {
 	}
 	if len(final.Results) != 1 || final.Results[0].CodeID != "id-production" {
 		t.Errorf("results = %+v, want one for production", final.Results)
+	}
+}
+
+func TestCreateDeployModules(t *testing.T) {
+	fake := &fakeDeployer{}
+	s := newServer(t, fake)
+
+	resp := send(t, s, "POST", "/v1/deploys",
+		`{"environments":["production"],"modules":["apache","nginx"],"wait":true}`, bearer())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	rec := decode(t, resp)
+	if len(rec.Modules) != 2 || rec.Modules[0] != "apache" {
+		t.Errorf("record modules = %v, want [apache nginx]", rec.Modules)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 1 || len(fake.calls[0].Modules) != 2 {
+		t.Fatalf("deployer called with %+v, want the two modules", fake.calls)
+	}
+
+	// A name r10k would silently match against nothing is refused up front.
+	for _, bad := range []string{`"puppetlabs/apache"`, `"puppetlabs-apache"`, `"Apache"`} {
+		resp := send(t, s, "POST", "/v1/deploys",
+			`{"environments":["production"],"modules":[`+bad+`]}`, bearer())
+		if resp.Code != http.StatusBadRequest {
+			t.Errorf("modules [%s]: status = %d, want 400", bad, resp.Code)
+		}
 	}
 }
 
@@ -301,8 +329,8 @@ func TestWebhookBranchDeleteDeploysAll(t *testing.T) {
 	// part of a deploy, so the webhook must have asked for everything.
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.alls) != 1 || !fake.alls[0] || len(fake.calls[0]) != 0 {
-		t.Fatalf("deployer called with envs=%v all=%v, want no envs and all=true", fake.calls, fake.alls)
+	if len(fake.calls) != 1 || !fake.calls[0].All || len(fake.calls[0].Environments) != 0 {
+		t.Fatalf("deployer called with %+v, want no envs and All", fake.calls)
 	}
 	rec := list[0]
 	if !rec.All {
