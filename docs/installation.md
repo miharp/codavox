@@ -64,10 +64,44 @@ catalogs](production.md#a-primary-that-compiles-its-own-catalogs).
 
 ## Install
 
-Download the package for your platform from the
-[releases page](https://github.com/miharp/codavox/releases), then install it by
-URL. Both package managers resolve dependencies and support clean removal when
-installing from a file. Set `VERSION` to the latest release:
+Add the package repository, then install:
+
+```console
+# RPM: Rocky, RHEL, AlmaLinux, CentOS Stream
+curl -fsSL https://mikeharp.com/codavox/rpm/codavox.repo -o /etc/yum.repos.d/codavox.repo
+dnf install codavox
+```
+
+```console
+# DEB: Debian, Ubuntu
+curl -fsSL https://mikeharp.com/codavox/codavox.asc -o /etc/apt/keyrings/codavox.asc
+echo "deb [signed-by=/etc/apt/keyrings/codavox.asc] https://mikeharp.com/codavox/deb stable main" > /etc/apt/sources.list.d/codavox.list
+apt-get update && apt-get install codavox
+```
+
+Both architectures are in the one repository; the package manager picks the
+host's. Pin a version with `dnf install codavox-0.8.0` or
+`apt-get install codavox=0.8.0`, and upgrade with the package manager as you
+would any other package.
+
+The repository is static files on GitHub Pages, rebuilt from the
+[releases page](https://github.com/miharp/codavox/releases) by the
+[Repository workflow](../.github/workflows/repository.yml) every time a release
+is published, so it carries every version ever released and nothing that is not
+a release. **What is signed is the repository metadata, not the packages**:
+`repomd.xml` for dnf and `Release` for apt, each of which names every package's
+SHA-256. That is how apt has always worked, and dnf verifies it with
+`repo_gpgcheck`, which the `.repo` file turns on. It also means the packages in
+the repository are byte-for-byte the release assets, so `checksums.txt` on the
+releases page still describes them. The signing key is
+[`codavox.asc`](https://mikeharp.com/codavox/codavox.asc).
+
+### Installing by URL instead
+
+A host that cannot reach the repository can install the package directly from
+the releases page. Both package managers resolve dependencies and support clean
+removal when installing from a file, but neither can upgrade it for you. Set
+`VERSION` to the release you want:
 
 ```console
 VERSION=0.8.0
@@ -79,11 +113,6 @@ VERSION=0.8.0
 curl -fsSLO "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.deb"
 apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 ```
-
-There is no package repository yet. Hosting one means `createrepo`, an apt
-repository, and GPG key generation, distribution, and rotation — a standing
-commitment rather than a build step. Installing by URL gives dependency
-resolution, upgrade, and clean uninstall in the meantime.
 
 ## What the package installs
 
@@ -157,7 +186,7 @@ dnf remove codavox
 ```
 
 ```console
-apt-get install --only-upgrade ./codavox_<version>_linux_arm64.deb
+apt-get install --only-upgrade codavox
 apt-get purge codavox
 ```
 
