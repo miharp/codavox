@@ -26,33 +26,31 @@ bytes are parsed (unpacking a downloaded artifact) is fuzzed nightly.
 
 It ships as rpm and deb for `linux/amd64` and `linux/arm64`, with systemd units
 and a Puppet module ([miharp/puppet-codavox](https://github.com/miharp/puppet-codavox))
-to configure it. What "early" still means: no package repository, so installs
-are by URL; the version numbers are `0.x` and the on-disk layout may yet change;
-and it has not run anywhere but a test estate.
+to configure it. What "early" still means: the version numbers are `0.x` and
+the on-disk layout may yet change, and it has not run anywhere but a test
+estate.
 
 ## Install
 
-Download the package for your architecture from the
-[releases page](https://github.com/miharp/codavox/releases). Set `VERSION` to the
-latest release, then install by URL:
-
 ```console
 # RPM: Rocky, RHEL, AlmaLinux, CentOS Stream
-VERSION=0.8.0
-dnf install "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.rpm"
+curl -fsSL https://mikeharp.com/codavox/rpm/codavox.repo -o /etc/yum.repos.d/codavox.repo
+dnf install codavox
 ```
 
 ```console
 # DEB: Debian, Ubuntu
-VERSION=0.8.0
-curl -fsSLO "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.deb"
-apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
+curl -fsSL https://mikeharp.com/codavox/codavox.asc -o /etc/apt/keyrings/codavox.asc
+echo "deb [signed-by=/etc/apt/keyrings/codavox.asc] https://mikeharp.com/codavox/deb stable main" > /etc/apt/sources.list.d/codavox.list
+apt-get update && apt-get install codavox
 ```
 
-Pick `arm64` or `amd64` to match the host. OpenVox on Apple silicon is `arm64`.
-The package installs `/usr/bin/codavox` and the symlinks OpenVox Server invokes;
-see [installation.md](docs/installation.md). To build from source instead, see
-[Development](#development).
+The repository serves `amd64` and `arm64` and is rebuilt from the
+[releases page](https://github.com/miharp/codavox/releases) on every release.
+The package installs `/usr/bin/codavox` and the symlinks OpenVox Server invokes.
+See [installation.md](docs/installation.md) for what is signed, how to pin a
+version, and installing by URL on a host that cannot reach the repository. To
+build from source instead, see [Development](#development).
 
 ## Your first server
 

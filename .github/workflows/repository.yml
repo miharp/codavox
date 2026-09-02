@@ -1,0 +1,80 @@
+---
+# Publishes the package repository to GitHub Pages.
+#
+# The repository is derived from GitHub Releases on every run — every rpm and
+# deb ever released, indexed and signed — and deployed as static files. There
+# is no branch to maintain and no state to migrate: the releases page stays
+# the source of truth, and this is a view of it. See packaging/repo/build.sh
+# for what is signed and why.
+name: Repository
+
+on:
+  release:
+    types: [published]
+  # Rebuild on demand: after enabling Pages, rotating the key, or fixing the
+  # builder, without cutting a release to get a new site.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a later run supersedes an earlier one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Index and sign every release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install createrepo_c and apt-ftparchive
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q createrepo-c apt-utils
+
+      - name: Fetch every release's packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p pkgs
+          for tag in $(gh release list --limit 200 --json tagName -q '.[].tagName'); do
+            gh release download "$tag" --dir pkgs --pattern '*.rpm' --pattern '*.deb' --skip-existing
+          done
+          ls pkgs
+
+      # The key's secret half lives only in the repository secrets; the public
+      # half is exported into the site by the builder, so users fetch it from
+      # the same place they fetch packages.
+      - name: Import the signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.REPO_GPG_PRIVATE_KEY }}
+        run: |
+          [ -n "$GPG_PRIVATE_KEY" ] || { echo "REPO_GPG_PRIVATE_KEY is not set; refusing to publish an unsigned repository" >&2; exit 1; }
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec/{print $5; exit}' > keyid
+          echo "key $(cat keyid)"
+
+      - name: Build the repository
+        env:
+          GPG_PASSPHRASE: ${{ secrets.REPO_GPG_PASSPHRASE }}
+        run: packaging/repo/build.sh pkgs site "$(cat keyid)"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

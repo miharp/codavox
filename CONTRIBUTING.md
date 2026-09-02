@@ -109,7 +109,9 @@ So a release is the last step, not the first:
    existing estate. The release workflow refuses a tag those files do not
    document.
 3. Tag `vX.Y.Z` on `main` and push it. The workflow tests, packages, and
-   publishes the release.
+   publishes the release. Publishing it triggers the Repository workflow,
+   which rebuilds the package repository from every release and deploys it to
+   <https://mikeharp.com/codavox>; check the new version shows there.
 4. In the lab, `./scripts/use-release X.Y.Z` returns the pin to the published
    package.
 
