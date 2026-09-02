@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -91,23 +92,56 @@ type Result struct {
 	Err     string `json:"error,omitempty"`
 }
 
-// Run deploys environments and, when wait is set, blocks until the publisher
-// serves each new code_id.
+// Request is one deploy: which environments, and optionally which modules.
+type Request struct {
+	// Environments to deploy; empty with All set means every environment.
+	Environments []string
+	// All deploys every environment r10k's sources define.
+	All bool
+	// Modules restricts the deploy to these Puppetfile modules, named by their
+	// short name (apache, not puppetlabs/apache). The environment's own code
+	// is left as it is; only the named modules are re-resolved. Empty means
+	// the whole environment.
+	Modules []string
+	// Wait blocks until the publisher serves each resulting code_id.
+	Wait bool
+}
+
+// moduleName is a Puppet module's short name, which is also the directory
+// r10k installs it to.
+var moduleName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// ValidateModule rejects anything that is not a module's short name.
 //
-// It runs r10k once for all requested environments, seals each resulting tree
-// to report its code_id, signals the running publisher to reseal, and — with
-// wait — polls until the publisher has materialized the new artifact. The
+// r10k matches a requested module by its short name and, given one that
+// matches nothing, deploys nothing and exits 0. So `puppetlabs/apache` and
+// `puppetlabs-apache` are refused here with a hint, rather than being passed
+// through to a silent no-op.
+func ValidateModule(name string) error {
+	if !moduleName.MatchString(name) {
+		return fmt.Errorf("invalid module name %q: give the Puppetfile short name (apache, not puppetlabs/apache)", name)
+	}
+	return nil
+}
+
+// Run deploys what req asks for and, when req.Wait is set, blocks until the
+// publisher serves each new code_id.
+//
+// It runs r10k for the requested environments, seals each resulting tree to
+// report its code_id, signals the running publisher to reseal, and — with
+// Wait — polls until the publisher has materialized the new artifact. The
 // returned error is non-nil if the deploy did not fully succeed; the results
 // are still returned so a caller can report per-environment status.
 //
 // Cancelling ctx terminates a running r10k, the same way the timeout does.
-func Run(ctx context.Context, cfg Config, envs []string, all, wait bool) ([]Result, error) {
+func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 	if cfg.BaseDir == "" {
 		return nil, errors.New("deploy needs a basedir directory")
 	}
 	if cfg.StateDir == "" {
 		return nil, errors.New("deploy needs a state directory")
 	}
+	envs, all, wait := req.Environments, req.All, req.Wait
 	if all && len(envs) > 0 {
 		return nil, errors.New("give environments or --all, not both")
 	}
@@ -116,6 +150,11 @@ func Run(ctx context.Context, cfg Config, envs []string, all, wait bool) ([]Resu
 	}
 	for _, env := range envs {
 		if err := layout.ValidateEnvironment(env); err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range req.Modules {
+		if err := ValidateModule(m); err != nil {
 			return nil, err
 		}
 	}
@@ -140,8 +179,10 @@ func Run(ctx context.Context, cfg Config, envs []string, all, wait bool) ([]Resu
 	}
 	defer release()
 
-	if err := runR10k(ctx, cfg, r10k, envs); err != nil {
-		return nil, err
+	for _, args := range r10kArgs(cfg, req) {
+		if err := runR10k(ctx, cfg, r10k, args); err != nil {
+			return nil, err
+		}
 	}
 
 	// For --all, report whatever is now staged; r10k does not tell us the set.
@@ -164,6 +205,13 @@ func Run(ctx context.Context, cfg Config, envs []string, all, wait bool) ([]Resu
 		}
 		r.CodeID = id
 		r.Commit = commit
+		// r10k deploys nothing and exits 0 for a module name that matches
+		// nothing in the Puppetfile. Exiting 0 here too would print a
+		// code_id beside the word "deployed" for a deploy that changed
+		// nothing, so the tree is checked for each module by name.
+		if missing := missingModules(filepath.Join(cfg.BaseDir, env), req.Modules); len(missing) > 0 {
+			r.Err = fmt.Sprintf("not in %s's Puppetfile: %s", env, strings.Join(missing, ", "))
+		}
 		results = append(results, r)
 	}
 
@@ -204,6 +252,76 @@ func Run(ctx context.Context, cfg Config, envs []string, all, wait bool) ([]Resu
 	return results, summarize(results)
 }
 
+// r10kArgs is the r10k invocation, or invocations, for a request.
+//
+// A whole-environment deploy is one run: `deploy environment <envs>`, which
+// resolves the control-repo branches and, with Modules, their Puppetfiles. A
+// module deploy is `deploy module <names>`, which touches only those modules
+// and leaves the environment's own code alone; its -e option takes a single
+// environment, so naming several means one run per environment.
+func r10kArgs(cfg Config, req Request) [][]string {
+	var tail []string
+	if cfg.R10kConfig != "" {
+		tail = append(tail, "--config", cfg.R10kConfig)
+	}
+
+	if len(req.Modules) == 0 {
+		args := []string{"deploy", "environment"}
+		args = append(args, req.Environments...) // empty for --all
+		if cfg.Modules {
+			args = append(args, "--puppetfile")
+		}
+		return [][]string{append(args, tail...)}
+	}
+
+	if req.All {
+		args := append([]string{"deploy", "module"}, req.Modules...)
+		return [][]string{append(args, tail...)}
+	}
+	runs := make([][]string, 0, len(req.Environments))
+	for _, env := range req.Environments {
+		args := []string{"deploy", "module", "-e", env}
+		args = append(args, req.Modules...)
+		runs = append(runs, append(args, tail...))
+	}
+	return runs
+}
+
+// missingModules reports which of the requested modules are absent from the
+// environment's module directory after r10k ran.
+//
+// The directory is the Puppetfile's moduledir when it sets one, else r10k's
+// default of modules. A module r10k deployed is a directory there under its
+// short name, so absence means the name matched nothing.
+func missingModules(envDir string, modules []string) []string {
+	if len(modules) == 0 {
+		return nil
+	}
+	dir := filepath.Join(envDir, moduleDir(envDir))
+	var missing []string
+	for _, m := range modules {
+		if info, err := os.Stat(filepath.Join(dir, m)); err != nil || !info.IsDir() {
+			missing = append(missing, m)
+		}
+	}
+	return missing
+}
+
+// moduleDirDirective matches a Puppetfile's `moduledir 'path'` line.
+var moduleDirDirective = regexp.MustCompile(`(?m)^\s*moduledir\s+['"]([^'"]+)['"]`)
+
+// moduleDir reads the Puppetfile's moduledir, defaulting to r10k's "modules".
+func moduleDir(envDir string) string {
+	b, err := os.ReadFile(filepath.Join(envDir, "Puppetfile")) // #nosec G304 -- inside the operator's basedir
+	if err != nil {
+		return "modules"
+	}
+	if m := moduleDirDirective.FindSubmatch(b); m != nil {
+		return string(m[1])
+	}
+	return "modules"
+}
+
 func stderr(cfg Config) io.Writer {
 	if cfg.Stderr != nil {
 		return cfg.Stderr
@@ -237,16 +355,7 @@ func resolveR10k(explicit string) (string, error) {
 // overlap the basedir lock exists to prevent. So r10k gets its own process
 // group and the group as a whole is signaled: SIGTERM first, then SIGKILL
 // after killGrace for anything that ignored it.
-func runR10k(ctx context.Context, cfg Config, r10k string, envs []string) error {
-	args := []string{"deploy", "environment"}
-	args = append(args, envs...) // empty for --all
-	if cfg.Modules {
-		args = append(args, "--puppetfile")
-	}
-	if cfg.R10kConfig != "" {
-		args = append(args, "--config", cfg.R10kConfig)
-	}
-
+func runR10k(ctx context.Context, cfg Config, r10k string, args []string) error {
 	timeout := cfg.R10kTimeout
 	if timeout <= 0 {
 		timeout = DefaultR10kTimeout

@@ -34,6 +34,7 @@ Code Manager runs r10k once and distributes the result.
 | `--all` | | Deploy every environment r10k manages |
 | `--wait` | | Block until the publisher serves each new `code_id` |
 | `--no-modules` | | Skip Puppetfile module resolution (`r10k` without `--puppetfile`) |
+| `--modules` | | Re-resolve only these Puppetfile modules, comma-separated, by short name; the environment's own code is left as it is |
 | `--r10k` | `r10k` on `PATH`, then `/opt/puppetlabs/puppet/bin/r10k` | r10k binary |
 | `--r10k-config` | r10k's own lookup | r10k.yaml passed with `--config` |
 | `--r10k-timeout` | `10m` | Bound on the r10k run; past it, r10k is terminated and the deploy fails |
@@ -84,6 +85,41 @@ production    deployed    a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0ad
 This is primary-side completion: the new version is sealed and servable. It does
 not wait for every compiler to converge — compilers poll and catch up on their
 own, and a stronger fleet-wide wait is a later feature.
+
+## Deploying only some modules
+
+Bumping one module in the Puppetfile does not need the whole environment
+re-resolved. Name the modules, and only they are touched:
+
+```console
+$ codavox deploy production --modules apache,nginx
+production    deployed    9c1e…    (commit 5f2e9c1)
+```
+
+This runs r10k's own `deploy module -e production apache nginx`, the same
+shape as Code Manager's `modules` parameter. Modules are named by their
+Puppetfile short name — `apache`, not `puppetlabs/apache` — because that is the
+name r10k matches and the directory it installs to. Several environments mean
+one r10k run per environment; with `--all`, the modules are re-resolved in every
+environment.
+
+The environment's own code is **not** refreshed by a module deploy. A pushed
+change to `site.pp` or the Puppetfile itself still needs a plain deploy.
+
+r10k deploys nothing and exits 0 for a name that matches nothing in the
+Puppetfile. codavox does not pass that through: after r10k runs, each named
+module must exist under the environment's module directory (the Puppetfile's
+`moduledir`, or `modules`), and one that does not fails that environment:
+
+```console
+$ codavox deploy production --modules nginxx
+production    failed    not in production's Puppetfile: nginxx
+$ echo $?
+1
+```
+
+The environment is still sealed and published as it stands, since nothing
+about it is wrong; only the claim that `nginxx` was deployed is refused.
 
 ## When r10k hangs
 
