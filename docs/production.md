@@ -543,7 +543,10 @@ because sealing is reproducible. Compilers see no change and download nothing.
 ## Removing an environment
 
 Deleting a branch and redeploying removes the environment from the primary, and
-the publisher stops advertising it:
+the publisher stops advertising it. The
+[webhook](deploy-server.md#branch-deletions) runs that deploy for you when it
+sees the deletion; by hand it is any deploy at all, because r10k purges
+unmanaged environments at the end of every run:
 
 ```console
 $ r10k deploy environment -v -p

@@ -27,12 +27,14 @@ const (
 type fakeDeployer struct {
 	mu    sync.Mutex
 	calls [][]string
+	alls  []bool
 	err   error
 }
 
 func (f *fakeDeployer) Deploy(envs []string, all bool) ([]deploy.Result, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, envs)
+	f.alls = append(f.alls, all)
 	f.mu.Unlock()
 
 	// Simulate --all resolving to a fixed set the caller did not name.
@@ -264,6 +266,57 @@ func TestWebhookRouteDeploysAndRecords(t *testing.T) {
 	}
 	if len(list[0].Environments) != 1 || list[0].Environments[0] != "production" {
 		t.Errorf("environments = %v, want [production]", list[0].Environments)
+	}
+}
+
+func TestWebhookBranchDeleteDeploysAll(t *testing.T) {
+	fake := &fakeDeployer{}
+	s := newServer(t, fake)
+
+	body := `{"ref":"refs/heads/testing","deleted":true}`
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(body))
+	resp := send(t, s, "POST", "/v1/webhook", body, map[string]string{
+		"X-GitHub-Event":      "push",
+		"X-Hub-Signature-256": "sha256=" + hex.EncodeToString(mac.Sum(nil)),
+	})
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.Code)
+	}
+
+	var list []Record
+	for range 200 {
+		r := send(t, s, "GET", "/v1/deploys", "", bearer())
+		_ = json.Unmarshal(r.Body.Bytes(), &list)
+		if len(list) == 1 && list[0].Status == StatusComplete {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(list) != 1 {
+		t.Fatalf("history has %d records, want 1", len(list))
+	}
+
+	// The deleted branch cannot be deployed by name; r10k purges it only as
+	// part of a deploy, so the webhook must have asked for everything.
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.alls) != 1 || !fake.alls[0] || len(fake.calls[0]) != 0 {
+		t.Fatalf("deployer called with envs=%v all=%v, want no envs and all=true", fake.calls, fake.alls)
+	}
+	rec := list[0]
+	if !rec.All {
+		t.Error("record.All = false, want true")
+	}
+	if rec.Source != "webhook" {
+		t.Errorf("source = %q, want webhook", rec.Source)
+	}
+	if !strings.Contains(rec.Reason, "testing") || !strings.Contains(rec.Reason, "deleted") {
+		t.Errorf("reason = %q, want it to name the deleted branch's environment", rec.Reason)
+	}
+	// Environments reports what remains after the purge, as an --all deploy does.
+	if len(rec.Environments) != 2 {
+		t.Errorf("environments = %v, want the remaining set", rec.Environments)
 	}
 }
 
