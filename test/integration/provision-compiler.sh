@@ -101,6 +101,9 @@ mkdir -p /etc/codavox
 # A short interval keeps the harness quick; keep is small so the prune assertion
 # has something to reap. flush_environment_cache is written out at its default
 # so features.sh can flip it to reproduce a stale cache, then flip it back.
+# prune_environments is on so the webhook-deletion feature can follow a removed
+# environment all the way to this node; it never acts on an empty or failed
+# poll, so it is safe alongside the revocation feature.
 cat > /etc/codavox/config.yaml <<CFG
 ssldir: ${SSLDIR}
 certname: ${CERTNAME}
@@ -111,6 +114,7 @@ agent:
   keep: 2
   min_age: 1s
   flush_environment_cache: true
+  prune_environments: true
 CFG
 
 echo "[compiler] starting the codavox agent and waiting for convergence"

@@ -44,7 +44,8 @@ Exercise the compiler-side commands without root using `CODAVOX_ROOT` (see
 The integration harness in [test/integration/](test/integration/) is
 self-contained: it stands up its own two-node OpenVox topology in Docker, needing
 no ovadm. It runs on push to `main`, and on a pull request touching workflows,
-packaging, or the harness itself — the paths nothing else verifies. Run it
+packaging, the harness itself, or the deploy path and agent packages — the
+paths nothing else verifies against a real r10k or puppetserver. Run it
 locally before any change to TLS or the agent's HTTP client: `agent --once` is a
 fresh process per sync, so no Go test can see keep-alive behavior.
 

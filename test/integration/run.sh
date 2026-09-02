@@ -21,9 +21,15 @@ trap teardown EXIT
 
 log "Building a codavox package from the current checkout"
 # goreleaser is often installed under GOPATH/bin, which isn't always on PATH.
+# Without it at all, `go run` fetches it into the module cache — slower the
+# first time, and enough to run this harness without installing anything.
 command -v go >/dev/null && PATH="$PATH:$(go env GOPATH)/bin"
-command -v goreleaser >/dev/null || die "goreleaser not found (see docs/installation.md)"
-( cd "$repo" && goreleaser release --snapshot --clean --skip=publish >/tmp/codavox-goreleaser.log 2>&1 ) \
+if command -v goreleaser >/dev/null; then
+  goreleaser=(goreleaser)
+else
+  goreleaser=(go run github.com/goreleaser/goreleaser/v2@latest)
+fi
+( cd "$repo" && "${goreleaser[@]}" release --snapshot --clean --skip=publish >/tmp/codavox-goreleaser.log 2>&1 ) \
   || { tail -20 /tmp/codavox-goreleaser.log; die "goreleaser build failed"; }
 
 log "Starting the two-node topology"

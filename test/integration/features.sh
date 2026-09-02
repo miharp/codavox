@@ -292,12 +292,202 @@ else
   fail "codavox compilers did not list the compiler"
 fi
 
-# Feature 9: revoking a compiler's Puppet certificate revokes its access to code.
+# Feature 9: the deploy path against a real r10k. provision-primary.sh seeded
+# a control repo from the served tree plus a Puppetfile naming a local module
+# repo; nothing has run r10k yet. `codavox deploy` must run it, seal the
+# result, and — with --wait — return once the publisher serves it. The compiler
+# then converges on a tree that now carries the module and an r10k deploy
+# record, so the fleet view can finally report a commit.
+log "Feature 9 — codavox deploy runs r10k, seals, and the compiler converges on it"
+before=$(code_id "$COMPILER" production)
+if out=$(docker exec "$PRIMARY" codavox deploy production --wait 2>&1); then
+  pass "codavox deploy production --wait exited 0"
+else
+  fail "codavox deploy production --wait failed: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
+fi
+if printf '%s\n' "$out" | grep -qE '^production[[:space:]]+deployed[[:space:]]+[0-9a-f]{64}.*serving'; then
+  pass "reported the environment deployed and serving"
+else
+  fail "unexpected deploy output: $(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+fi
+if wait_for 60 "$COMPILER" "[ \"\$(codavox-code-id production)\" != '$before' ]"; then
+  pass "compiler converged on the r10k-built tree $(code_id "$COMPILER" production)"
+else
+  fail "compiler did not converge after the r10k deploy"
+fi
+if docker exec "$COMPILER" test -f /opt/puppetlabs/codavox/environments/production/modules/apache/manifests/init.pp; then
+  pass "the compiler serves the Puppetfile module r10k resolved"
+else
+  fail "modules/apache is missing from the compiler's production tree"
+fi
+if docker exec "$PRIMARY" codavox compilers 2>/dev/null | grep -qE '^compiler +production +[0-9a-f]{12} +[0-9a-f]{7,} '; then
+  pass "the fleet view now reports the control-repo commit r10k recorded"
+else
+  fail "the fleet view shows no commit after an r10k deploy"
+fi
+
+# Feature 10: a module deploy re-resolves only the named module, the way Code
+# Manager's modules parameter does, and the two ways r10k stays silent — a
+# short name that matches nothing, and a long name it would never match — are
+# both refused rather than reported as deployed.
+log "Feature 10 — deploy --modules re-resolves one module, and refuses what r10k would ignore"
+docker exec "$PRIMARY" bash -lc \
+  "cd /srv/modules/apache && echo '# module change $(date +%s%N)' >> manifests/init.pp && git commit -qam 'apache 2'"
+before=$(code_id "$COMPILER" production)
+if out=$(docker exec "$PRIMARY" codavox deploy production --modules apache --wait 2>&1) \
+  && printf '%s\n' "$out" | grep -qE '^production[[:space:]]+deployed'; then
+  pass "deploy --modules apache exited 0"
+else
+  fail "deploy --modules apache failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+fi
+if wait_for 60 "$COMPILER" "grep -q 'module change' /opt/puppetlabs/codavox/environments/production/modules/apache/manifests/init.pp"; then
+  pass "the compiler serves the re-resolved module ($before -> $(code_id "$COMPILER" production))"
+else
+  fail "the module change never reached the compiler"
+fi
+if out=$(docker exec "$PRIMARY" codavox deploy production --modules nosuchmodule 2>&1); then
+  fail "deploy --modules nosuchmodule exited 0 (r10k deploys nothing and exits 0 for it; codavox must not)"
+elif printf '%s' "$out" | grep -q "not in production's Puppetfile: nosuchmodule"; then
+  pass "a module not in the Puppetfile fails the deploy: $(printf '%s' "$out" | grep -o "not in production's Puppetfile: nosuchmodule")"
+else
+  fail "deploy --modules nosuchmodule failed for another reason: $(printf '%s' "$out" | head -1)"
+fi
+if out=$(docker exec "$PRIMARY" codavox deploy production --modules puppetlabs/apache 2>&1); then
+  fail "a long module name was accepted"
+elif printf '%s' "$out" | grep -qi 'short name'; then
+  pass "a long module name is refused with the hint, before r10k runs"
+else
+  fail "a long module name failed without the hint: $(printf '%s' "$out" | head -1)"
+fi
+
+# Feature 11: a hung r10k is bounded. r10k blocks forever on a fetch to a
+# remote that does not answer, and while it does the basedir lock is held and
+# every later deploy queues behind it. The bound must end r10k and everything
+# it spawned — git, ssh — or the survivors keep writing the basedir under the
+# next deploy.
+log "Feature 11 — a hung r10k is killed at --r10k-timeout, children included"
+docker exec "$PRIMARY" bash -lc "cat > /tmp/hang-r10k <<'S'
+#!/bin/sh
+sleep 300 &
+echo \$! > /tmp/hang-r10k.child
+wait
+S
+chmod 0755 /tmp/hang-r10k; rm -f /tmp/hang-r10k.child"
+start=$(date +%s)
+if out=$(docker exec "$PRIMARY" codavox deploy production --r10k /tmp/hang-r10k --r10k-timeout 2s 2>&1); then
+  fail "a hung r10k was reported as a successful deploy"
+elif printf '%s' "$out" | grep -q 'timed out after 2s'; then
+  pass "$(printf '%s' "$out" | grep -o 'r10k deploy timed out after 2s') in $(( $(date +%s) - start ))s"
+else
+  fail "the deploy failed without timing out: $(printf '%s' "$out" | head -1)"
+fi
+sleep 2
+child=$(docker exec "$PRIMARY" cat /tmp/hang-r10k.child 2>/dev/null)
+if [ -n "$child" ] && ! docker exec "$PRIMARY" kill -0 "$child" 2>/dev/null; then
+  pass "r10k's child $child is gone: the whole process group was signaled"
+else
+  fail "r10k's child ${child:-?} survived the timeout"
+  docker exec "$PRIMARY" kill -9 "$child" 2>/dev/null || true
+fi
+if out=$(docker exec "$PRIMARY" codavox deploy production 2>&1); then
+  pass "the next deploy ran at once: the lock was released"
+else
+  fail "the deploy after the timeout failed: $(printf '%s' "$out" | tail -1)"
+fi
+
+# Feature 12: an artifact past --max-unpacked is refused before it lands. Each
+# file was always bounded by its declared size; the sum was not, and a gzip of
+# zeros expands ~1000:1 on every compiler at once. Verification by resealing
+# would refuse the tree, but only once it was on disk. A scratch root, so the
+# real agent on this node is untouched, and a bound of 64 bytes because the
+# whole tree here is a few hundred: the lab's 4 KiB let it through.
+log "Feature 12 — an artifact past --max-unpacked is refused before it lands"
+out=$(docker exec "$COMPILER" bash -lc 'rm -rf /tmp/cap; CODAVOX_ROOT=/tmp/cap codavox agent --once \
+  --environmentpath /tmp/cap/environments --flush-environment-cache false --max-unpacked 64 2>&1; echo "rc=$?"')
+if printf '%s' "$out" | grep -q 'expands past 64 bytes'; then
+  pass "refused: $(printf '%s' "$out" | grep -o 'refusing archive that expands past 64 bytes at [^" ]*' | head -1)"
+else
+  fail "no refusal in the agent's output: $(printf '%s' "$out" | head -1 | cut -c1-140)"
+fi
+if [ "$(docker exec "$COMPILER" bash -lc 'ls /tmp/cap/versions 2>/dev/null | grep -vc "^\."')" = "0" ]; then
+  pass "nothing was installed under the scratch root"
+else
+  fail "a version directory landed despite the refusal"
+fi
+docker exec "$COMPILER" rm -rf /tmp/cap
+
+# Feature 13: a branch deleted at the webhook is purged from the primary and
+# pruned on the compiler. A real branch, so r10k stages a real environment
+# and the compiler serves it before it goes; then the webhook's deletion
+# deploys everything, r10k's deployment-level purge removes the directory,
+# the publisher stops advertising it, and the compiler — prune on — drops it.
+log "Feature 13 — a branch deleted at the webhook is purged, and the compiler prunes it"
+docker exec "$PRIMARY" git -C /srv/control branch testing production
+if out=$(docker exec "$PRIMARY" codavox deploy --all --wait 2>&1) \
+  && printf '%s\n' "$out" | grep -qE '^testing[[:space:]]+deployed'; then
+  pass "deploy --all staged the testing environment"
+else
+  fail "testing was not deployed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+fi
+if wait_for 60 "$COMPILER" "test -L /opt/puppetlabs/codavox/environments/testing"; then
+  pass "the compiler serves testing"
+else
+  fail "the compiler never picked testing up"
+fi
+
+docker exec "$PRIMARY" git -C /srv/control branch -D testing >/dev/null
+code=$(docker exec "$COMPILER" bash -lc "curl -sk -o /dev/null -w '%{http_code}' --max-time 5 -X POST \
+  -H 'Authorization: Bearer integration-secret' -H 'Content-Type: application/json' \
+  -d '{\"environment\":\"testing\",\"deleted\":true}' https://primary:8170/v1/webhook")
+if [ "$code" = "202" ]; then
+  pass "the webhook accepted the deletion (202)"
+else
+  fail "the webhook returned $code for a deletion"
+fi
+
+rec=""
+for _ in $(seq 1 40); do
+  rec=$(docker exec "$COMPILER" bash -lc "curl -sk --max-time 5 -H 'Authorization: Bearer integration-token' https://primary:8170/v1/deploys" \
+    | python3 -c '
+import json,sys
+for r in json.load(sys.stdin):
+    if r.get("source")=="webhook" and r.get("all"):
+        print(r.get("status"), r.get("reason",""), ",".join(r.get("environments") or []), sep="|")
+        break' 2>/dev/null)
+  case "$rec" in complete*|failed*) break ;; esac
+  sleep 3
+done
+status=$(printf '%s' "$rec" | cut -d'|' -f1)
+reason=$(printf '%s' "$rec" | cut -d'|' -f2)
+remaining=$(printf '%s' "$rec" | cut -d'|' -f3)
+if [ "$status" = "complete" ] && [ "$reason" = "branch for testing deleted" ]; then
+  pass "the history shows a complete all-deploy, reason '$reason'"
+else
+  fail "no complete webhook all-deploy in the history (got '${rec:-nothing}')"
+  docker exec "$PRIMARY" journalctl -u codavox-deploy-server --no-pager -n 10 2>&1 | tail -10
+fi
+case ",$remaining," in
+  *,testing,*) fail "r10k did not purge testing: the deploy still reports it among what remains" ;;
+  *) pass "the deploy reports only what remains: $remaining" ;;
+esac
+if docker exec "$PRIMARY" test -e /etc/puppetlabs/code/environments/testing; then
+  fail "testing is still staged on the primary"
+else
+  pass "testing is gone from the primary's basedir"
+fi
+if wait_for 60 "$COMPILER" "! test -e /opt/puppetlabs/codavox/environments/testing"; then
+  pass "the compiler pruned testing"
+else
+  fail "the compiler still serves testing"
+  docker exec "$COMPILER" journalctl -u codavox-agent --no-pager -n 10 2>&1 | tail -10
+fi
+
+# Feature 14: revoking a compiler's Puppet certificate revokes its access to code.
 # The certificate stays cryptographically valid and keeps its pp_role, so only
 # the CRL check stops it — and it must take effect without restarting anything.
 #
 # This runs last: the compiler cannot fetch code afterwards.
-log "Feature 9 — revoking a compiler's certificate cuts off its access to code"
+log "Feature 14 — revoking a compiler's certificate cuts off its access to code"
 before=$(code_id "$COMPILER" production)
 # Keep the output: when this failed in CI it was suppressed, so the log said
 # only "could not revoke" and not that the CA host did not resolve.
