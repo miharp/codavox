@@ -49,6 +49,18 @@ Give `environments` or `"all": true`, not both. Returns a deploy record. Without
 `"wait": true` it blocks until the deploy is terminal and returns `200` with the
 final record.
 
+Add `modules` to re-resolve only those Puppetfile modules, by short name, and
+leave the environment's own code as it is — Code Manager's `modules` parameter:
+
+```json
+{ "environments": ["production"], "modules": ["apache", "nginx"] }
+```
+
+A name that is not a module's short name (`puppetlabs/apache`) is refused with
+`400`; a short name that matches nothing in the Puppetfile fails that
+environment's result after r10k runs, because r10k itself would deploy nothing
+and exit 0. See [deploying.md](deploying.md#deploying-only-some-modules).
+
 ```console
 $ curl -H 'Authorization: Bearer <token>' \
     -d '{"environments":["production"],"wait":true}' \
@@ -73,6 +85,7 @@ bearer token.
 | `status` | `queued`, `running`, `complete`, or `failed` |
 | `source` | `api` or `webhook` |
 | `environments` | Environments deployed (filled from results for an `all` deploy) |
+| `modules` | Modules the deploy was restricted to, when it was |
 | `reason` | Why the deploy was submitted when the request alone does not say, such as `branch for testing deleted` |
 | `submitted_at` / `started_at` / `finished_at` | Lifecycle timestamps |
 | `results` | Per-environment `code_id`, `commit`, and any `error` |

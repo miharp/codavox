@@ -42,6 +42,7 @@ type Record struct {
 	Source       string   `json:"source"` // "api" or "webhook"
 	Environments []string `json:"environments,omitempty"`
 	All          bool     `json:"all,omitempty"`
+	Modules      []string `json:"modules,omitempty"`
 	// Reason says why a deploy was submitted when the request alone does not:
 	// a webhook that deploys everything because a branch was deleted, for
 	// instance. Empty for a deploy that asked for exactly what it got.
@@ -56,7 +57,7 @@ type Record struct {
 // Deployer runs a deploy. The real implementation is Runner; tests substitute a
 // recorder so the server's HTTP and queue behavior is exercised without r10k.
 type Deployer interface {
-	Deploy(envs []string, all bool) ([]deploy.Result, error)
+	Deploy(req deploy.Request) ([]deploy.Result, error)
 }
 
 // Runner is the production Deployer: it wraps internal/deploy.Run.
@@ -67,11 +68,12 @@ type Runner struct {
 // Deploy runs r10k and reseals. It does not wait for the publisher to serve —
 // the record is complete once the deploy has landed on the primary, and
 // compilers converge on their own by polling.
-func (r Runner) Deploy(envs []string, all bool) ([]deploy.Result, error) {
+func (r Runner) Deploy(req deploy.Request) ([]deploy.Result, error) {
+	req.Wait = false
 	// Background rather than the server's context: a deploy that has started
 	// r10k should finish or hit its own timeout, not be torn down mid-checkout
 	// because the daemon was asked to stop. The timeout bounds it either way.
-	return deploy.Run(context.Background(), r.Config, envs, all, false)
+	return deploy.Run(context.Background(), r.Config, req)
 }
 
 // Config configures a Server.
@@ -169,11 +171,14 @@ func (s *Server) process(id string) {
 	now := time.Now().UTC()
 	rec.Status = StatusRunning
 	rec.StartedAt = &now
-	envs := append([]string(nil), rec.Environments...)
-	all := rec.All
+	req := deploy.Request{
+		Environments: append([]string(nil), rec.Environments...),
+		All:          rec.All,
+		Modules:      append([]string(nil), rec.Modules...),
+	}
 	s.mu.Unlock()
 
-	results, err := s.deployer.Deploy(envs, all)
+	results, err := s.deployer.Deploy(req)
 
 	s.mu.Lock()
 	fin := time.Now().UTC()
@@ -198,7 +203,7 @@ func (s *Server) process(id string) {
 // submit records a deploy and enqueues it. Enqueue and store happen under one
 // lock, so the worker — which must take the same lock — cannot observe the id
 // on the queue before its record exists.
-func (s *Server) submit(source string, envs []string, all bool, reason string) (Record, error) {
+func (s *Server) submit(source string, req deploy.Request, reason string) (Record, error) {
 	id, err := newID()
 	if err != nil {
 		return Record{}, err
@@ -207,8 +212,9 @@ func (s *Server) submit(source string, envs []string, all bool, reason string) (
 		ID:           id,
 		Status:       StatusQueued,
 		Source:       source,
-		Environments: envs,
-		All:          all,
+		Environments: req.Environments,
+		All:          req.All,
+		Modules:      req.Modules,
 		Reason:       reason,
 		SubmittedAt:  time.Now().UTC(),
 	}
@@ -289,6 +295,7 @@ func (s *Server) handleCreateDeploy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Environments []string `json:"environments"`
 		All          bool     `json:"all"`
+		Modules      []string `json:"modules"`
 		Wait         bool     `json:"wait"`
 	}
 	if len(body) > 0 {
@@ -305,8 +312,21 @@ func (s *Server) handleCreateDeploy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request needs environments or all", http.StatusBadRequest)
 		return
 	}
+	// Refused here, as a 400, rather than queued to fail: the caller is still
+	// on the line, and a module name r10k would silently match against
+	// nothing is the caller's mistake to see now.
+	for _, m := range req.Modules {
+		if err := deploy.ValidateModule(m); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 
-	rec, err := s.submit("api", req.Environments, req.All, "")
+	rec, err := s.submit("api", deploy.Request{
+		Environments: req.Environments,
+		All:          req.All,
+		Modules:      req.Modules,
+	}, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -372,14 +392,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// remains, which is what the deploy record should say after a removal.
 	// Compilers then drop the environment only if their agent prunes; that
 	// stays opt-in on each node.
-	envs := []string{push.Environment}
-	all := false
+	req := deploy.Request{Environments: []string{push.Environment}}
 	reason := ""
 	if push.Deleted {
-		envs, all = nil, true
+		req = deploy.Request{All: true}
 		reason = "branch for " + push.Environment + " deleted"
 	}
-	rec, err := s.submit("webhook", envs, all, reason)
+	rec, err := s.submit("webhook", req, reason)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

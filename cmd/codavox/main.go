@@ -68,10 +68,11 @@ Usage:
         longer serves.
 
   codavox deploy <environment>... | --all [--wait] [--no-modules]
-                 [--r10k <path>] [--r10k-config <file>] [--r10k-timeout <dur>]
-                 [--basedir <dir>] [--state <dir>] [--json]
+                 [--modules <name>,...] [--r10k <path>] [--r10k-config <file>]
+                 [--r10k-timeout <dur>] [--basedir <dir>] [--state <dir>] [--json]
         Run r10k to stage code, then trigger the publisher to reseal. Run this
         on the primary. With --wait, block until the new code_id is served.
+        With --modules, re-resolve only those Puppetfile modules.
 
   codavox deploy-server [--api-token <file>] [--secret <file>]
                         [--listen <addr>] [--no-tls] [--history <n>]
@@ -684,6 +685,7 @@ func deployRun(args []string) error {
 		all         bool
 		wait        bool
 		noModules   bool
+		modules     []string
 		r10k        string
 		r10kConfig  string
 		r10kTimeout time.Duration
@@ -724,6 +726,15 @@ func deployRun(args []string) error {
 			opts.wait = true
 		case "--no-modules":
 			opts.noModules = true
+		case "--modules":
+			var v string
+			if v, err = next(); err == nil {
+				for m := range strings.SplitSeq(v, ",") {
+					if m = strings.TrimSpace(m); m != "" {
+						opts.modules = append(opts.modules, m)
+					}
+				}
+			}
 		case "--json":
 			opts.asJSON = true
 		case "--r10k":
@@ -753,6 +764,9 @@ func deployRun(args []string) error {
 	if opts.basedir == "" {
 		return fmt.Errorf("deploy needs --basedir <dir> (r10k's basedir, the same the publisher serves)")
 	}
+	if len(opts.modules) > 0 && opts.noModules {
+		return fmt.Errorf("give --modules or --no-modules, not both")
+	}
 
 	// r10k runs in its own process group, so an interrupt at the terminal no
 	// longer reaches it by itself; forward it through the context instead.
@@ -766,7 +780,12 @@ func deployRun(args []string) error {
 		BaseDir:     opts.basedir,
 		StateDir:    opts.state,
 		Modules:     !opts.noModules,
-	}, opts.envs, opts.all, opts.wait)
+	}, deploy.Request{
+		Environments: opts.envs,
+		All:          opts.all,
+		Modules:      opts.modules,
+		Wait:         opts.wait,
+	})
 
 	if err := printDeployResults(results, opts.wait, opts.asJSON); err != nil {
 		return err
