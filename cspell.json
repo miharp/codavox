@@ -44,6 +44,7 @@
     "gosec",
     "govulncheck",
     "gzip",
+    "harpworks",
     "headless",
     "HMAC",
     "HOCON",
