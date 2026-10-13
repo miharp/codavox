@@ -172,7 +172,8 @@ fi
 ```
 
 A server that compiles from anywhere else takes the script's existing branches,
-as it does today.
+as it does today. A server that is already wired needs codavox 0.9 or later
+before the branch reaches it, because earlier versions do not ship the command.
 
 ### It fails rather than mislabels
 
