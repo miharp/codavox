@@ -5,6 +5,7 @@ process.
 
 - [`codavox code-id`](#codavox-code-id)
 - [`codavox code-content`](#codavox-code-content)
+- [`codavox config-version`](#codavox-config-version)
 - [`codavox compilers`](#codavox-compilers)
 - [`codavox provenance`](#codavox-provenance)
 - [`codavox version`](#codavox-version)
@@ -13,7 +14,7 @@ process.
 - [On-disk layout](#on-disk-layout)
 - [Environment variables](#environment-variables)
 
-The compiler-side commands (`code-id`, `code-content`) and the operator commands
+The compiler-side commands (`code-id`, `code-content`, `config-version`) and the operator commands
 `compilers` and `provenance` are documented here. Every other subcommand has its own page:
 
 | command | page |
@@ -109,6 +110,100 @@ would become an arbitrary file read on every compiler.
 $ codavox code-content production a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed ../../../../etc/passwd
 codavox: opening "../../../../etc/passwd" in a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed: openat ../../../../etc/passwd: path escapes from parent
 ```
+
+---
+
+## `codavox config-version`
+
+```text
+codavox config-version <environmentpath> <environment>
+```
+
+Prints the first 12 characters of the `code_id` an environment is serving, for
+`config_version` in `environment.conf`. OpenVox uses that value as the catalog's
+version: the `Applying configuration version '...'` line of an agent run, and
+the version recorded in reports and OpenVoxDB. Twelve characters is the width of
+the `CODE_ID` column in [`codavox compilers`](#codavox-compilers), so a run log,
+a report, and the fleet view name the same version.
+
+```console
+$ codavox config-version /opt/puppetlabs/codavox/environments production
+a3f1c9e4b2d8
+```
+
+It is only a label. Static catalogs work without it; see
+[static-catalogs.md](static-catalogs.md).
+
+### Why the stock script needs it
+
+The [`config_version.sh`](https://github.com/puppetlabs/control-repo/blob/production/scripts/config_version.sh)
+in the standard control repo takes the commit from `.r10k-deploy.json` or `.git`
+in the environment directory, and falls back to `date +%s` when neither is
+there. A sealed tree has neither ([sealing.md](sealing.md#what-is-deliberately-excluded)),
+so once a server compiles from codavox, every catalog it compiles is labeled
+with a timestamp. With `environment_timeout = 0`, every compile gets a new one.
+With the environment cached, it changes whenever the cache is expired, which is
+every swap and every restart of `puppetserver`, whether or not the code changed.
+
+### Wiring it in
+
+Point `config_version` at the `codavox-config-version` symlink the package
+ships. Like the versioned-code commands, it is given only positional arguments,
+so it cannot name a subcommand. `config_version` lives in `environment.conf`, so
+this is a change to your control repo, not to codavox.
+
+If every server that compiles the environment is wired to codavox, use it
+directly:
+
+```ini
+config_version = '/usr/bin/codavox-config-version $environmentpath $environment'
+```
+
+If some are not yet, as during a [rollout](production.md#rollout) or on a
+primary still compiling from r10k's basedir, keep your script and add this
+after its argument check:
+
+```sh
+# codavox serves this environment from a sealed tree with no .git or
+# .r10k-deploy.json, so label the catalog with its code_id.
+if [ "$1" = /opt/puppetlabs/codavox/environments ]; then
+  exec /usr/bin/codavox-config-version "$1" "$2"
+fi
+```
+
+A server that compiles from anywhere else takes the script's existing branches,
+as it does today.
+
+### It fails rather than mislabels
+
+If `<environmentpath>` is not the directory codavox fills, or the environment's
+link is missing or malformed, the command exits `1` and prints nothing to
+stdout. OpenVox treats a non-zero exit from `config_version` as a compile
+error, so the catalog fails with the reason in the server log instead of being
+labeled with a version that describes some other tree. That is why the direct
+form waits until every server is wired, and why the script checks the path
+first.
+
+On success it writes only the label. OpenVox runs a `config_version` command
+with its stderr merged into its stdout, so anything else written would become
+part of the label.
+
+Both behaviors are verified against openvox at `e4c91ba`: the version is
+computed once per environment instance and a failed command raises a
+`ParseError`
+([`type_collection.rb#L170-L182`](https://github.com/OpenVoxProject/openvox/blob/e4c91baedaf2ef28ad9b742986b01414b9606d77/lib/puppet/resource/type_collection.rb#L170-L182)),
+and a command run with no options combines its two streams
+([`execution.rb#L138-L145`](https://github.com/OpenVoxProject/openvox/blob/e4c91baedaf2ef28ad9b742986b01414b9606d77/lib/puppet/util/execution.rb#L138-L145)).
+
+### Finding the commit
+
+The label names the tree, not the commit. On the publisher, `codavox compilers`
+shows each `code_id` beside the control-repo commit it came from, and
+[`codavox provenance`](#codavox-provenance) answers the same question for a
+full `code_id`, which `codavox code-id <environment>` prints on the compiler.
+The commit is not part of the label because one tree can come from several
+commits: a commit that changes nothing r10k resolves seals to the same
+`code_id`.
 
 ---
 
@@ -287,10 +382,12 @@ Prints the build version. Reports `dev` for builds without version metadata.
 | `1` | runtime failure — invalid input, missing state, undeployed version, unreadable file |
 | `2` | usage error — unknown subcommand or wrong argument count |
 
-**Both commands are silent on success.** This is a requirement, not a style
-choice: OpenVox Server logs anything a versioned-code command writes to stderr
-at `ERROR` level *even when the exit code is zero*. A command that chatters on
-success fills the server log at one line per catalog compile.
+**The compiler-side commands are silent on success.** This is a requirement,
+not a style choice: OpenVox Server logs anything a versioned-code command writes
+to stderr at `ERROR` level *even when the exit code is zero*. A command that
+chatters on success fills the server log at one line per catalog compile. For
+`config-version` the stakes are higher, because its stderr would become part of
+the label.
 
 ---
 
@@ -312,8 +409,9 @@ with no subcommand.
 codavox dispatches on `argv[0]`, so the package ships symlinks:
 
 ```text
-/usr/bin/codavox-code-id      -> codavox
-/usr/bin/codavox-code-content -> codavox
+/usr/bin/codavox-code-id        -> codavox
+/usr/bin/codavox-code-content   -> codavox
+/usr/bin/codavox-config-version -> codavox   # for environment.conf; see config-version above
 ```
 
 A shell wrapper would also work, but it would add a shell fork to a path that

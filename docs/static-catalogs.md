@@ -52,10 +52,16 @@ version string you see in `Applying configuration version '...'`. It has nothing
 to do with `code-id-command` and does not pin any file content. The standard
 control repo already sets it, wired to a
 [script](https://github.com/puppetlabs/control-repo/blob/production/scripts/config_version.sh)
-whose last resort is `date +%s`. That is fine for a label and fatal as a
+whose last resort is `date +%s`. That is tolerable in a label and fatal as a
 `code_id`, which must be stable and identical on every compiler. The two happen
 to both be a git SHA in a typical setup, which is exactly why they get conflated.
 Having `config_version` set tells you nothing about whether static catalogs work.
+
+Under codavox, that script always reaches its last resort: it reads the commit
+from `.git` or `.r10k-deploy.json`, and a sealed tree carries neither. Point
+`config_version` at [`codavox config-version`](commands.md#codavox-config-version)
+instead, and each catalog is labeled with the short form of the `code_id` it was
+compiled from.
 
 **`static_catalogs = true` is not enough on its own.** It defaults to `true`
 already, and does nothing until `code-id-command` and `code-content-command` are

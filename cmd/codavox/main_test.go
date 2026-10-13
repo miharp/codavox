@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miharp/codavox/internal/layout"
 	"github.com/miharp/codavox/internal/publish"
 )
 
@@ -18,8 +19,9 @@ import (
 // breaks every compiler that has already been configured.
 func TestArgv0Commands(t *testing.T) {
 	want := map[string]string{
-		"codavox-code-id":      "code-id",
-		"codavox-code-content": "code-content",
+		"codavox-code-id":        "code-id",
+		"codavox-code-content":   "code-content",
+		"codavox-config-version": "config-version",
 	}
 
 	for name, cmd := range want {
@@ -53,6 +55,59 @@ func TestRunRejectsWrongArgCount(t *testing.T) {
 	}
 	if err := run("code-content", []string{"env", "id"}); err == nil {
 		t.Error("code-content with two args should error")
+	}
+	if err := run("config-version", []string{"production"}); err == nil {
+		t.Error("config-version with one arg should error")
+	}
+}
+
+// config-version is what Puppet runs for environment.conf's config_version,
+// passing the environmentpath it compiled from. The label must be the code_id
+// at the fleet view's width, and anything it cannot vouch for must fail rather
+// than print a label for some other tree.
+func TestConfigVersion(t *testing.T) {
+	root := t.TempDir()
+	envpath := filepath.Join(root, "environments")
+	id := "a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed"
+	version := filepath.Join(root, "versions", "production_"+id)
+	for _, dir := range []string{envpath, version} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(version, filepath.Join(envpath, "production")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(layout.RootEnvVar, root)
+	t.Setenv(layout.EnvironmentPathEnvVar, envpath)
+
+	// A trailing slash is how an operator might well write environmentpath.
+	for _, arg := range []string{envpath, envpath + "/"} {
+		out, err := captureStdout(t, func() error {
+			return run("config-version", []string{arg, "production"})
+		})
+		if err != nil {
+			t.Fatalf("config-version %s production: %v", arg, err)
+		}
+		if want := id[:shortID] + "\n"; out != want {
+			t.Errorf("config-version %s production printed %q, want %q", arg, out, want)
+		}
+	}
+
+	refused := map[string][]string{
+		// The server compiles from r10k's basedir, not from codavox.
+		"another environmentpath":   {"/etc/puppetlabs/code/environments", "production"},
+		"an undeployed environment": {envpath, "staging"},
+		"an invalid environment":    {envpath, "../production"},
+	}
+	for name, args := range refused {
+		out, err := captureStdout(t, func() error { return run("config-version", args) })
+		if err == nil {
+			t.Errorf("%s: config-version %v succeeded, want an error", name, args)
+		}
+		if out != "" {
+			t.Errorf("%s: config-version %v printed %q, want nothing", name, args, out)
+		}
 	}
 }
 

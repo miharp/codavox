@@ -57,7 +57,8 @@ nfpms:
 
     contents:
       # OpenVox Server passes only positional arguments to code-id-command,
-      # so it cannot invoke `codavox code-id`. The binary dispatches on
+      # so it cannot invoke `codavox code-id`, and environment.conf's
+      # config_version is run the same way. The binary dispatches on
       # argv[0], so these symlinks give each setting a path to point at.
       # A shell wrapper would work too, but would add a fork to a path that
       # runs on every catalog compile.
@@ -66,6 +67,9 @@ nfpms:
         type: symlink
       - src: /usr/bin/codavox
         dst: /usr/bin/codavox-code-content
+        type: symlink
+      - src: /usr/bin/codavox
+        dst: /usr/bin/codavox-config-version
         type: symlink
 
       - dst: /opt/puppetlabs/codavox/versions
