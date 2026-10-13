@@ -406,7 +406,10 @@ repo's `environment.conf` sets `config_version` to the standard
 catalog with a timestamp, because the script reads the commit from files a
 sealed tree does not carry. Add the codavox branch from [Wiring it
 in](commands.md#wiring-it-in) to that script and deploy it. On servers not yet
-wired it changes nothing, so it can go out ahead of the rollout.
+wired it changes nothing, so it can go out ahead of the rollout. A server that
+is already wired needs codavox 0.9 or later first, since the branch runs a
+command earlier versions do not ship; see [Upgrading to
+0.9](#upgrading-to-09).
 
 Bring each compiler up in this order:
 
@@ -555,6 +558,27 @@ only the named Puppetfile modules, and deploy records carry `reason` and
 `modules`. [`puppet-codavox`](https://github.com/miharp/puppet-codavox) 0.5.0
 adds `r10k_timeout` and `agent_max_unpacked` as parameters; the 0.4.0 module
 keeps working unchanged.
+
+### Upgrading to 0.9
+
+Nothing about the artifact format or the `code_id` derivation changed, so no
+environment is re-downloaded, and nothing on the servers has to change first.
+0.9 is built with Go 1.26.9, which fixes standard-library vulnerabilities in
+`crypto/tls` and `net/http` that the publisher and agent reach, so upgrade
+promptly.
+
+The new [`codavox config-version`](commands.md#codavox-config-version) labels
+catalogs with the `code_id` they were compiled from. Check your control repo:
+if its `environment.conf` sets `config_version` to the standard
+`scripts/config_version.sh`, as the OpenVox control-repo template does, every
+server already wired to codavox has been labeling catalogs with a timestamp.
+Add the codavox branch from [Wiring it in](commands.md#wiring-it-in) to that
+script, but **only after every wired server runs 0.9**: the branch runs
+`/usr/bin/codavox-config-version` on those servers, and on one still at 0.8 the
+command is missing, so the script fails and so does every compile there.
+Servers not yet wired to codavox ignore the branch, whatever their version.
+[`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
+pin `codavox::package_ensure: '0.9.0'`.
 
 ## Backup and rebuild
 
