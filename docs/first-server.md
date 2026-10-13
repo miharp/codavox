@@ -104,6 +104,13 @@ or the server keeps compiling the old tree under the new `code_id`. Add the
 puppetserver](commands.md#wiring-into-puppetserver), admitting this node by
 certname, and set `flush_environment_cache` back to `true`.
 
+If your control repo sets `config_version` to the standard
+`scripts/config_version.sh`, every catalog from here on is labeled with a
+timestamp instead of a commit, because a sealed tree carries neither `.git` nor
+`.r10k-deploy.json`. Add the codavox branch from [Wiring it
+in](commands.md#wiring-it-in) to that script, and the label becomes the short
+form of the `code_id` the catalog was compiled from.
+
 **8. Prove it.** Compile a catalog and read the version it was pinned to:
 
 ```console

@@ -398,7 +398,17 @@ Decide deliberately rather than discovering it during an incident.
 ## Rollout
 
 Installing the package changes nothing; **wiring a compiler is the careful
-step**. Bring each one up in this order:
+step**.
+
+Once, before the first compiler: **fix your catalog label.** If your control
+repo's `environment.conf` sets `config_version` to the standard
+`scripts/config_version.sh`, the first server you wire starts labeling every
+catalog with a timestamp, because the script reads the commit from files a
+sealed tree does not carry. Add the codavox branch from [Wiring it
+in](commands.md#wiring-it-in) to that script and deploy it. On servers not yet
+wired it changes nothing, so it can go out ahead of the rollout.
+
+Bring each compiler up in this order:
 
 1. Install the package. It is inert — no unit is enabled, nothing is written to
    `puppetserver`'s config.

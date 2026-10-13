@@ -484,12 +484,53 @@ else
   docker exec "$COMPILER" journalctl -u codavox-agent --no-pager -n 10 2>&1 | tail -10
 fi
 
-# Feature 14: revoking a compiler's Puppet certificate revokes its access to code.
+# Feature 14: the catalog label. OpenVox runs environment.conf's config_version
+# itself, interpolating $environmentpath and merging stderr into the result, so
+# only a real compile shows what a catalog is labeled. The standard control
+# repo's script would print a timestamp here, because a sealed tree carries no
+# .git or .r10k-deploy.json. environment_timeout = 0 makes OpenVox rerun the
+# command on every compile, so two compiles a second apart agreeing proves the
+# label is not derived from the time.
+log "Feature 14 — config_version labels each catalog with the code_id it came from"
+applied_version() {
+  docker exec "$COMPILER" grep -o "Applying configuration version '[^']*'" /tmp/agent.log | cut -d"'" -f2
+}
+before=$(code_id "$COMPILER" production)
+docker exec -i "$PRIMARY" tee /srv/control/environment.conf >/dev/null <<'CONF'
+# Minimal environment seeded by the codavox integration harness.
+config_version = '/usr/bin/codavox-config-version $environmentpath $environment'
+environment_timeout = 0
+CONF
+docker exec -w /srv/control "$PRIMARY" git commit -qam "label catalogs with the code_id"
+if out=$(docker exec "$PRIMARY" codavox deploy production --wait 2>&1) \
+  && wait_for 60 "$COMPILER" "[ \"\$(codavox-code-id production)\" != '$before' ]"; then
+  want=$(code_id "$COMPILER" production | cut -c1-12)
+  first="" second=""
+  compile_catalog && first=$(applied_version)
+  sleep 1
+  compile_catalog && second=$(applied_version)
+  if [ "$first" = "$want" ] && [ "$second" = "$want" ]; then
+    pass "two compiles were both labeled $want, the served code_id"
+  else
+    fail "labels were '$first' and '$second', want the served code_id '$want'"
+    docker exec "$COMPILER" tail -5 /tmp/agent.log
+  fi
+  stamped=$(docker exec "$COMPILER" grep -o '"version":"[^"]*"' "$CATALOG" | head -1 | cut -d'"' -f4)
+  if [ "$stamped" = "$want" ]; then
+    pass "the catalog carries the label as its version"
+  else
+    fail "the catalog's version is '$stamped', want '$want'"
+  fi
+else
+  fail "the config_version change did not reach the compiler: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
+fi
+
+# Feature 15: revoking a compiler's Puppet certificate revokes its access to code.
 # The certificate stays cryptographically valid and keeps its pp_role, so only
 # the CRL check stops it — and it must take effect without restarting anything.
 #
 # This runs last: the compiler cannot fetch code afterwards.
-log "Feature 14 — revoking a compiler's certificate cuts off its access to code"
+log "Feature 15 — revoking a compiler's certificate cuts off its access to code"
 before=$(code_id "$COMPILER" production)
 # Keep the output: when this failed in CI it was suppressed, so the log said
 # only "could not revoke" and not that the CA host did not resolve.

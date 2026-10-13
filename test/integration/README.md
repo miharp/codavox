@@ -85,15 +85,22 @@ second compiler if you want that shape too.
     environment the compiler serves; deleting it and posting the deletion to
     the webhook **deploys everything, r10k purges the directory, the publisher
     stops advertising it, and the compiler prunes it**.
-14. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
+14. **Catalog label.** With `config_version` pointed at
+    `codavox-config-version`, OpenVox **labels each catalog with the short
+    `code_id` it was compiled from**, and two compiles a second apart get the
+    same label, where the standard control repo's script would print a
+    timestamp.
+15. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
     off its access to code** — with no restart of the publisher, and while the
     certificate is still cryptographically valid and still carries its `pp_role`.
     Runs last, because the compiler cannot fetch code afterwards.
 
-Features 4, 8, 13, and 14 are the four that **no Go test can replace**. The
+Features 4, 8, 13, 14, and 15 are the five that **no Go test can replace**. The
 environment cache is puppetserver's, so only a real server can show it going
 stale and being expired. Feature 13 needs r10k's own purge and a compiler that
-polls for real. For the other two, every Go test drives `agent --once`
+polls for real. Feature 14 needs OpenVox itself to interpolate
+`$environmentpath`, run the command, and merge its stderr into the label. For
+features 8 and 15, every Go test drives `agent --once`
 — a fresh process and a fresh TLS connection per sync — whereas here the agent
 is a long-running daemon polling over one keep-alive connection. A report that
 only rode on the first request of a connection, or a CRL consulted only at

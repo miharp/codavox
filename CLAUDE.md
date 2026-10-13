@@ -52,13 +52,15 @@ fresh process per sync, so no Go test can see keep-alive behavior.
 ## Architecture
 
 Single Go binary, `github.com/miharp/codavox`, dispatched by subcommand in
-[cmd/codavox/main.go](cmd/codavox/main.go). Two subcommands run per-compiler and
-must stay fast; the others run on the primary or as a daemon.
+[cmd/codavox/main.go](cmd/codavox/main.go). Three subcommands run per-compiler
+and must stay fast (`code-id`, `code-content`, and `config-version`, which
+OpenVox runs for `config_version` in `environment.conf`); the others run on the
+primary or as a daemon.
 
-The binary also dispatches on `argv[0]`: symlinks `codavox-code-id` and
-`codavox-code-content` map to their subcommands, because OpenVox Server passes
-only positional arguments and cannot invoke `codavox code-id <env>` with a
-subcommand word.
+The binary also dispatches on `argv[0]`: symlinks `codavox-code-id`,
+`codavox-code-content`, and `codavox-config-version` map to their subcommands,
+because OpenVox Server passes only positional arguments and cannot invoke
+`codavox code-id <env>` with a subcommand word.
 
 Package map (`internal/`):
 
@@ -100,8 +102,10 @@ argument, and each is defended by a test or a doc.
   `code-id` derives from the same symlink OpenVox Server reads, so one
   `rename(2)` changes both what is served and what is reported at the same
   instant. Two sources of truth have no safe swap ordering.
-- **Both commands are silent on success.** OpenVox Server logs anything written
-  to stderr at ERROR level *even when the exit code is 0*, once per compile.
+- **The compiler-side commands are silent on success.** OpenVox Server logs
+  anything written to stderr at ERROR level *even when the exit code is 0*, once
+  per compile. `config-version` is stricter still: OpenVox merges its stderr
+  into stdout, so stray output becomes part of the catalog's version label.
 - **`code_id` charset is `[a-zA-Z0-9_\-:;]`** — no `/`, `.`, `+`, or `=`. Use
   hex digests; base64 is rejected by OpenVox Server at runtime.
 - **Sealing must be reproducible.** Same tree in → same `code_id` and

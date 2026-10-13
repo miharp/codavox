@@ -48,6 +48,10 @@ Usage:
   codavox code-content <environment> <code-id> <file-path>
         Stream a file as of a specific deployed code version.
 
+  codavox config-version <environmentpath> <environment>
+        Print the short code_id an environment is serving, as a catalog label
+        for config_version in environment.conf.
+
   codavox seal <directory> [--manifest] [--archive <file>]
         Print the code_id for a staged environment tree. With --manifest,
         print the canonical manifest instead. With --archive, also write a
@@ -113,16 +117,18 @@ var version = "dev"
 // argv0Commands maps an invocation name to the subcommand it implies.
 //
 // puppetserver passes only positional arguments to code-id-command and
-// code-content-command, so neither setting can point at a binary that expects
-// a subcommand first. Dispatching on argv[0] lets a symlink stand in:
+// code-content-command, and environment.conf's config_version is run the same
+// way, so none of them can point at a binary that expects a subcommand first.
+// Dispatching on argv[0] lets a symlink stand in:
 //
 //	/usr/bin/codavox-code-id -> codavox
 //
 // A shell wrapper would also work, but it would add a shell fork to a path
 // that runs on every catalog compile. A symlink costs nothing.
 var argv0Commands = map[string]string{
-	"codavox-code-id":      "code-id",
-	"codavox-code-content": "code-content",
+	"codavox-code-id":        "code-id",
+	"codavox-code-content":   "code-content",
+	"codavox-config-version": "config-version",
 }
 
 func main() {
@@ -152,6 +158,8 @@ func run(cmd string, args []string) error {
 		return codeID(args)
 	case "code-content":
 		return codeContent(args)
+	case "config-version":
+		return configVersion(args)
 	case "seal":
 		return sealTree(args)
 	case "publish":
@@ -207,6 +215,40 @@ func codeContent(args []string) error {
 		return err
 	}
 	return out.Flush()
+}
+
+// configVersion prints the label environment.conf's config_version gives each
+// catalog: the short code_id this server is serving for an environment.
+//
+// The standard control repo's script reads the commit from .git or
+// .r10k-deploy.json in the environment directory and falls back to the
+// current time. Sealing leaves both out, so on a codavox environment that
+// script labels every catalog with a timestamp, which looks like a version and
+// names nothing. The code_id names the exact tree, and at the fleet view's
+// width it is the CODE_ID column of `codavox compilers`.
+//
+// Puppet passes the environmentpath it compiled from. Anything but the one
+// codavox fills is refused: there, the code_id would describe a tree this
+// server is not compiling. A refusal fails the compile, since Puppet raises on
+// a non-zero exit, and that is the point. Puppet also merges stderr into the
+// label, so nothing but the label is written on success.
+func configVersion(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("config-version takes exactly two arguments: <environmentpath> <environment>")
+	}
+
+	l := layout.New()
+	if filepath.Clean(args[0]) != filepath.Clean(l.EnvironmentPath) {
+		return fmt.Errorf("environmentpath %s is not the one codavox serves (%s), so no code_id describes it", args[0], l.EnvironmentPath)
+	}
+
+	id, err := l.CurrentCodeID(args[1])
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(truncate(id, shortID))
+	return nil
 }
 
 // sealTree derives the code_id for a staged tree, and optionally writes the

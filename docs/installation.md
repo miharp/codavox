@@ -118,8 +118,9 @@ apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 
 ```text
 /usr/bin/codavox
-/usr/bin/codavox-code-id       -> codavox
-/usr/bin/codavox-code-content  -> codavox
+/usr/bin/codavox-code-id         -> codavox
+/usr/bin/codavox-code-content    -> codavox
+/usr/bin/codavox-config-version  -> codavox
 /etc/codavox/config.yaml                       # conffile, shipped fully commented out
 /opt/puppetlabs/codavox/versions/
 /usr/lib/systemd/system/codavox-agent.service
@@ -128,9 +129,10 @@ apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 /usr/share/doc/codavox/config.example.yaml     # populated example, for reference
 ```
 
-The two symlinks exist because OpenVox Server passes only positional arguments
-to `code-id-command`, so it cannot invoke a subcommand. codavox dispatches on
-`argv[0]`. See [commands.md](commands.md).
+The symlinks exist because OpenVox Server passes only positional arguments to
+`code-id-command`, and to `config_version` in `environment.conf`, so neither can
+invoke a subcommand. codavox dispatches on `argv[0]`. See
+[commands.md](commands.md).
 
 The binary installs to `/usr/bin`, not `/opt/puppetlabs/bin`. That directory
 belongs to the openvox-agent package, and shipping into it risks file conflicts
