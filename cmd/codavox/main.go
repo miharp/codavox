@@ -49,8 +49,8 @@ Usage:
         Stream a file as of a specific deployed code version.
 
   codavox config-version <environmentpath> <environment>
-        Print the short code_id an environment is serving, as a catalog label
-        for config_version in environment.conf.
+        Print <environment>-<short code_id> for the version an environment is
+        serving, as a catalog label for config_version in environment.conf.
 
   codavox seal <directory> [--manifest] [--archive <file>]
         Print the code_id for a staged environment tree. With --manifest,
@@ -218,7 +218,8 @@ func codeContent(args []string) error {
 }
 
 // configVersion prints the label environment.conf's config_version gives each
-// catalog: the short code_id this server is serving for an environment.
+// catalog: the environment and the short code_id this server is serving for
+// it, as <environment>-<code_id>.
 //
 // The standard control repo's script reads the commit from .git or
 // .r10k-deploy.json in the environment directory and falls back to the
@@ -226,6 +227,16 @@ func codeContent(args []string) error {
 // script labels every catalog with a timestamp, which looks like a version and
 // names nothing. The code_id names the exact tree, and at the fleet view's
 // width it is the CODE_ID column of `codavox compilers`.
+//
+// The environment is there because the code_id cannot say which one: it
+// fingerprints the code alone, so production and a branch that has not
+// diverged from it share one. An environment name is \w+, so the label splits
+// cleanly at its first '-'.
+//
+// The commit is deliberately not part of it. One code_id can come from several
+// commits, so the label would have to change without the code changing, and
+// every compiler would need state the environment link does not carry.
+// `codavox provenance` answers it on the publisher.
 //
 // Puppet passes the environmentpath it compiled from. Anything but the one
 // codavox fills is refused: there, the code_id would describe a tree this
@@ -242,12 +253,13 @@ func configVersion(args []string) error {
 		return fmt.Errorf("environmentpath %s is not the one codavox serves (%s), so no code_id describes it", args[0], l.EnvironmentPath)
 	}
 
-	id, err := l.CurrentCodeID(args[1])
+	env := args[1]
+	id, err := l.CurrentCodeID(env)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println(truncate(id, shortID))
+	fmt.Println(env + "-" + truncate(id, shortID))
 	return nil
 }
 

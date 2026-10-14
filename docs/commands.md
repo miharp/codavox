@@ -119,17 +119,27 @@ codavox: opening "../../../../etc/passwd" in a3f1c9e4b2d8bb803c020b3aee66cd88871
 codavox config-version <environmentpath> <environment>
 ```
 
-Prints the first 12 characters of the `code_id` an environment is serving, for
-`config_version` in `environment.conf`. OpenVox uses that value as the catalog's
-version: the `Applying configuration version '...'` line of an agent run, and
-the version recorded in reports and OpenVoxDB. Twelve characters is the width of
-the `CODE_ID` column in [`codavox compilers`](#codavox-compilers), so a run log,
-a report, and the fleet view name the same version.
+Prints the environment and the first 12 characters of the `code_id` it is
+serving, joined by `-`, for `config_version` in `environment.conf`. OpenVox uses
+that value as the catalog's version: the `Applying configuration version '...'`
+line of an agent run, and the version recorded in reports and OpenVoxDB. The two
+parts are the `ENVIRONMENT` and `CODE_ID` columns in
+[`codavox compilers`](#codavox-compilers), at the same width, so a run log, a
+report, and the fleet view name the same version.
 
 ```console
 $ codavox config-version /opt/puppetlabs/codavox/environments production
-a3f1c9e4b2d8
+production-a3f1c9e4b2d8
 ```
+
+The environment is there because a `code_id` fingerprints the code alone, so
+two environments with identical trees, such as `production` and a branch that
+has not diverged from it, share one. Environment names cannot contain `-`, so
+the label splits cleanly at its first `-`.
+
+The control-repo commit is not part of the label. One `code_id` can come from
+several commits, and a compiler does not know which; ask the publisher with
+[`codavox provenance`](#codavox-provenance).
 
 It is only a label. Static catalogs work without it; see
 [static-catalogs.md](static-catalogs.md).
