@@ -86,8 +86,9 @@ second compiler if you want that shape too.
     the webhook **deploys everything, r10k purges the directory, the publisher
     stops advertising it, and the compiler prunes it**.
 14. **Catalog label.** With `config_version` pointed at
-    `codavox-config-version`, OpenVox **labels each catalog with the short
-    `code_id` it was compiled from**, and two compiles a second apart get the
+    `codavox-config-version`, OpenVox **labels each catalog with its
+    environment and the short `code_id` it was compiled from**, and two
+    compiles a second apart get the
     same label, where the standard control repo's script would print a
     timestamp.
 15. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts

@@ -491,7 +491,7 @@ fi
 # .git or .r10k-deploy.json. environment_timeout = 0 makes OpenVox rerun the
 # command on every compile, so two compiles a second apart agreeing proves the
 # label is not derived from the time.
-log "Feature 14 — config_version labels each catalog with the code_id it came from"
+log "Feature 14 — config_version labels each catalog with its environment and code_id"
 applied_version() {
   docker exec "$COMPILER" grep -o "Applying configuration version '[^']*'" /tmp/agent.log | cut -d"'" -f2
 }
@@ -504,15 +504,15 @@ CONF
 docker exec -w /srv/control "$PRIMARY" git commit -qam "label catalogs with the code_id"
 if out=$(docker exec "$PRIMARY" codavox deploy production --wait 2>&1) \
   && wait_for 60 "$COMPILER" "[ \"\$(codavox-code-id production)\" != '$before' ]"; then
-  want=$(code_id "$COMPILER" production | cut -c1-12)
+  want="production-$(code_id "$COMPILER" production | cut -c1-12)"
   first="" second=""
   compile_catalog && first=$(applied_version)
   sleep 1
   compile_catalog && second=$(applied_version)
   if [ "$first" = "$want" ] && [ "$second" = "$want" ]; then
-    pass "two compiles were both labeled $want, the served code_id"
+    pass "two compiles were both labeled $want, the environment and served code_id"
   else
-    fail "labels were '$first' and '$second', want the served code_id '$want'"
+    fail "labels were '$first' and '$second', want the environment and served code_id '$want'"
     docker exec "$COMPILER" tail -5 /tmp/agent.log
   fi
   stamped=$(docker exec "$COMPILER" grep -o '"version":"[^"]*"' "$CATALOG" | head -1 | cut -d'"' -f4)

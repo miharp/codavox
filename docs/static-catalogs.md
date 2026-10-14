@@ -60,8 +60,8 @@ Having `config_version` set tells you nothing about whether static catalogs work
 Under codavox, that script always reaches its last resort: it reads the commit
 from `.git` or `.r10k-deploy.json`, and a sealed tree carries neither. Point
 `config_version` at [`codavox config-version`](commands.md#codavox-config-version)
-instead, and each catalog is labeled with the short form of the `code_id` it was
-compiled from.
+instead, and each catalog is labeled with its environment and the short form of
+the `code_id` it was compiled from.
 
 **`static_catalogs = true` is not enough on its own.** It defaults to `true`
 already, and does nothing until `code-id-command` and `code-content-command` are

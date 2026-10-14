@@ -62,21 +62,24 @@ func TestRunRejectsWrongArgCount(t *testing.T) {
 }
 
 // config-version is what Puppet runs for environment.conf's config_version,
-// passing the environmentpath it compiled from. The label must be the code_id
-// at the fleet view's width, and anything it cannot vouch for must fail rather
-// than print a label for some other tree.
+// passing the environmentpath it compiled from. The label must be the
+// environment and the code_id at the fleet view's width, and anything it cannot
+// vouch for must fail rather than print a label for some other tree.
 func TestConfigVersion(t *testing.T) {
 	root := t.TempDir()
 	envpath := filepath.Join(root, "environments")
 	id := "a3f1c9e4b2d8bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed"
-	version := filepath.Join(root, "versions", "production_"+id)
-	for _, dir := range []string{envpath, version} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	// feature has not diverged from production, so it serves the same code_id.
+	for _, env := range []string{"production", "feature"} {
+		version := filepath.Join(root, "versions", env+"_"+id)
+		for _, dir := range []string{envpath, version} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(version, filepath.Join(envpath, env)); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := os.Symlink(version, filepath.Join(envpath, "production")); err != nil {
-		t.Fatal(err)
 	}
 	t.Setenv(layout.RootEnvVar, root)
 	t.Setenv(layout.EnvironmentPathEnvVar, envpath)
@@ -89,9 +92,20 @@ func TestConfigVersion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("config-version %s production: %v", arg, err)
 		}
-		if want := id[:shortID] + "\n"; out != want {
+		if want := "production-" + id[:shortID] + "\n"; out != want {
 			t.Errorf("config-version %s production printed %q, want %q", arg, out, want)
 		}
+	}
+
+	// The same code_id in another environment must not carry the same label.
+	out, err := captureStdout(t, func() error {
+		return run("config-version", []string{envpath, "feature"})
+	})
+	if err != nil {
+		t.Fatalf("config-version %s feature: %v", envpath, err)
+	}
+	if want := "feature-" + id[:shortID] + "\n"; out != want {
+		t.Errorf("config-version %s feature printed %q, want %q", envpath, out, want)
 	}
 
 	refused := map[string][]string{
