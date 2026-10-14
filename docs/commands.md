@@ -363,6 +363,8 @@ The usual troubleshooting path: read a puzzling compiler's version with
 
 Because a commit that leaves resolved content unchanged seals to the same
 `code_id`, one id can list several commits, printed most recently sealed first.
+A commit is listed again when the environment returns to it after another, so
+the first line is always the commit the environment was last deployed from.
 
 `--json` emits the records as an array for scripting. `--state` overrides the
 state directory (default `<root>/state`, honoring `CODAVOX_ROOT`).

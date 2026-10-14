@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 )
@@ -21,7 +20,9 @@ import (
 //
 // One code_id can have several records. A commit that does not change resolved
 // content seals to the same code_id, so the same id legitimately traces back to
-// more than one commit; that is useful history, not a conflict.
+// more than one commit; that is useful history, not a conflict. Records are
+// per environment, because two environments with identical trees share a
+// code_id but are deployed independently.
 type Provenance struct {
 	CodeID string `json:"code_id"`
 	Env    string `json:"environment"`
@@ -47,7 +48,7 @@ type Log struct {
 
 	mu      sync.Mutex
 	records []Provenance
-	seen    map[string]bool // codeID + "\x00" + commit
+	newest  map[string]string // env + "\x00" + codeID -> commit of its newest record
 }
 
 // OpenLog loads the provenance log at path, creating nothing.
@@ -56,7 +57,7 @@ type Log struct {
 // file that exists but cannot be read is a failure, because that hides history
 // that is genuinely there.
 func OpenLog(path string) (*Log, error) {
-	l := &Log{path: path, seen: map[string]bool{}}
+	l := &Log{path: path, newest: map[string]string{}}
 
 	f, err := os.Open(path) // #nosec G304 -- operator-supplied state path
 	if err != nil {
@@ -80,7 +81,9 @@ func OpenLog(path string) (*Log, error) {
 			return nil, fmt.Errorf("parsing provenance log %s: %w", path, err)
 		}
 		l.records = append(l.records, p)
-		l.seen[key(p.CodeID, p.Commit)] = true
+		// File order is append order, so the last record read for a key is its
+		// newest.
+		l.newest[key(p.Env, p.CodeID)] = p.Commit
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading provenance log %s: %w", path, err)
@@ -88,9 +91,20 @@ func OpenLog(path string) (*Log, error) {
 	return l, nil
 }
 
-func key(codeID, commit string) string { return codeID + "\x00" + commit }
+func key(env, codeID string) string { return env + "\x00" + codeID }
 
-// Record appends p unless an identical (code_id, commit) pair is already known.
+// Record appends p unless the newest record for its environment and code_id
+// already names the same commit.
+//
+// Every reseal records every environment, so this is what keeps identical
+// reseals from growing the log. It compares against the newest record only,
+// not against every commit ever seen, because the newest record is what the
+// fleet view and `codavox provenance` report as the commit an environment is
+// deployed from. Skipping any known pair would hide a branch reset to a commit
+// it had before, and leave the commit in between reported as current. The
+// environment is part of the key for the same reason: a branch cut from
+// production has production's code_id and commit, and must still get a record
+// of its own.
 //
 // Recording is best-effort by contract: the caller must not fail a deploy
 // because provenance could not be written. A write failure still leaves the
@@ -100,11 +114,11 @@ func (l *Log) Record(p Provenance) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	k := key(p.CodeID, p.Commit)
-	if l.seen[k] {
+	k := key(p.Env, p.CodeID)
+	if commit, ok := l.newest[k]; ok && commit == p.Commit {
 		return nil
 	}
-	l.seen[k] = true
+	l.newest[k] = p.Commit
 	l.records = append(l.records, p)
 
 	// The log is publisher-only diagnostic state read by the operator on this
@@ -130,6 +144,10 @@ func (l *Log) Record(p Provenance) error {
 
 // Lookup returns the records for an (env, code_id), most recently sealed first.
 //
+// The order is append order reversed rather than a sort on SealedAt. Records
+// are appended as they are sealed, so the two agree, but append order is the
+// one Record compares against, and a clock stepped backwards cannot reorder it.
+//
 // An empty result is the honest answer "nothing was recorded for this id," not
 // an error: provenance is best-effort, so its absence must never masquerade as
 // a different id's history.
@@ -138,12 +156,11 @@ func (l *Log) Lookup(env, codeID string) []Provenance {
 	defer l.mu.Unlock()
 
 	var out []Provenance
-	for _, p := range l.records {
-		if p.Env == env && p.CodeID == codeID {
+	for i := len(l.records) - 1; i >= 0; i-- {
+		if p := l.records[i]; p.Env == env && p.CodeID == codeID {
 			out = append(out, p)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].SealedAt.After(out[j].SealedAt) })
 	return out
 }
 

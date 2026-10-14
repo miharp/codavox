@@ -338,9 +338,10 @@ The publisher closes that gap. When it seals an environment it reads r10k's
 <state>/provenance.jsonl
 ```
 
-Each line maps a `code_id` to the control-repo commit (`signature`), r10k's
-deploy timestamp, and when the publisher sealed it. Query it with
-[`codavox provenance`](commands.md#codavox-provenance).
+Each line maps an environment's `code_id` to the control-repo commit
+(`signature`), r10k's deploy timestamp, and when the publisher sealed it. A
+reseal that finds the same commit as that environment's newest record adds
+nothing. Query it with [`codavox provenance`](commands.md#codavox-provenance).
 
 Three properties are deliberate:
 
@@ -350,7 +351,9 @@ Three properties are deliberate:
   it.
 - **One `code_id`, many commits.** A commit that does not change resolved content
   seals to the same `code_id`, so an id can trace back to several commits. That
-  is recorded history, not a conflict.
+  is recorded history, not a conflict. Records are kept per environment, so a
+  branch cut from `production`, with the same tree and the same commit, has its
+  own.
 - **Best-effort, never load-bearing.** A missing or malformed `.r10k-deploy.json`
   records nothing and never fails a deploy. This is not a violation of the
   no-fallbacks rule: that rule forbids serving *wrong content* while reporting

@@ -114,8 +114,8 @@ func TestProvenanceDeduplicates(t *testing.T) {
 
 	_, log := sealWithProvenance(t, basedir, logPath)
 
-	// Reseal the identical tree twice more; the (code_id, commit) pair is
-	// already known, so no duplicate rows accumulate.
+	// Reseal the identical tree twice more; the newest record already names
+	// this commit, so no duplicate rows accumulate.
 	s := NewStore(basedir, t.TempDir())
 	s.EnableProvenance(log)
 	if err := s.Reseal(); err != nil {
@@ -127,6 +127,70 @@ func TestProvenanceDeduplicates(t *testing.T) {
 
 	if got := log.Lookup("production", s.Environments()["production"]); len(got) != 1 {
 		t.Errorf("got %d records after three reseals, want 1 (deduplicated)", len(got))
+	}
+}
+
+// A branch just cut from production has production's tree and HEAD, so the
+// same code_id and the same commit. It is still its own environment, and the
+// fleet view looks its commit up by environment, so it needs its own record.
+func TestProvenanceUndivergedBranchGetsItsOwnRecord(t *testing.T) {
+	basedir := t.TempDir()
+	for _, env := range []string{"production", "feature"} {
+		dir := filepath.Join(basedir, env, "manifests")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "site.pp"), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		deploy := `{"name":"` + env + `","signature":"cafe1234"}`
+		if err := os.WriteFile(filepath.Join(basedir, env, ".r10k-deploy.json"), []byte(deploy), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, log := sealWithProvenance(t, basedir, filepath.Join(t.TempDir(), "provenance.jsonl"))
+
+	envs := s.Environments()
+	if envs["production"] != envs["feature"] {
+		t.Fatalf("identical trees sealed to different code_ids: %s and %s", envs["production"], envs["feature"])
+	}
+	for _, env := range []string{"production", "feature"} {
+		if got := log.Lookup(env, envs[env]); len(got) != 1 || got[0].Commit != "cafe1234" {
+			t.Errorf("lookup(%s) = %+v, want one record for cafe1234", env, got)
+		}
+	}
+}
+
+// Resetting a branch to a commit it had before, after another commit produced
+// the same tree, must report the commit it was reset to. That pair is already
+// in the log, but it is not the newest record, so it is recorded again.
+func TestProvenanceReturnToEarlierCommit(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "provenance.jsonl")
+	log, err := OpenLog(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, commit := range []string{"aaaa1111", "bbbb2222", "aaaa1111"} {
+		if err := log.Record(Provenance{CodeID: "x", Env: "production", Commit: commit}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := log.Lookup("production", "x"); len(got) != 3 || got[0].Commit != "aaaa1111" {
+		t.Fatalf("lookup = %+v, want three records with aaaa1111 newest", got)
+	}
+
+	// A reopened log knows which record is newest, so resealing the same
+	// commit again is still a no-op.
+	reopened, err := OpenLog(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Record(Provenance{CodeID: "x", Env: "production", Commit: "aaaa1111"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Lookup("production", "x"); len(got) != 3 || got[0].Commit != "aaaa1111" {
+		t.Errorf("after reopen, lookup = %+v, want the same three records", got)
 	}
 }
 
