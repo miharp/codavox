@@ -103,11 +103,11 @@ So a release is the last step, not the first:
    commits a pin to the snapshot; bring the VMs up fresh and run
    `bash audit/run.sh`. The record it commits carries the snapshot's version
    and the codavox commit it was built from.
-2. Bump `VERSION=` in [README.md](README.md) and
+2. Bump `VERSION=` and the pinned versions in
    [docs/installation.md](docs/installation.md), and add an upgrade note to
    [docs/production.md](docs/production.md) if the release asks anything of an
-   existing estate. The release workflow refuses a tag those files do not
-   document.
+   existing estate. The release workflow refuses a tag that `installation.md`
+   does not document.
 3. Tag `vX.Y.Z` on `main` and push it. The workflow tests, packages, and
    publishes the release. The package repository at
    <https://packages.harpworks.org> picks it up within the hour, or at once

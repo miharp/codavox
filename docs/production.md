@@ -580,6 +580,32 @@ Servers not yet wired to codavox ignore the branch, whatever their version.
 [`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
 pin `codavox::package_ensure: '0.9.0'`.
 
+### Upgrading to 0.10
+
+Nothing about the artifact format or the `code_id` derivation changed, so no
+environment is re-downloaded.
+
+**The catalog label changes.** [`codavox
+config-version`](commands.md#codavox-config-version) now prints the environment
+in front of the short `code_id`, `production-a3f1c9e4b2d8` where 0.9 printed
+`a3f1c9e4b2d8`, because two environments with identical trees share a
+`code_id` and their catalogs were labeled alike. If anything matches the bare
+label, such as an OpenVoxDB query, a dashboard, or an alert, update it before
+upgrading. During a rolling upgrade, servers still at 0.9 print the old form.
+With `environment_timeout = unlimited`, OpenVox computes the label once per
+cached environment, so an upgraded server keeps the old form for an environment
+until its cache is next expired, by the next deploy or a restart of OpenVox
+Server.
+
+**Branch environments get their commit in the fleet view.** The provenance log
+used to skip a branch that had the same tree and commit as another environment,
+so `codavox compilers` showed `-` in its COMMIT column. Records are now kept
+per environment. The publisher records the missing ones at its next reseal, on
+restart or at the next deploy.
+
+[`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
+pin `codavox::package_ensure: '0.10.0'`.
+
 ## Backup and rebuild
 
 Almost nothing here is precious, by design:
