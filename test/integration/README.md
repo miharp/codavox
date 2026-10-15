@@ -74,7 +74,9 @@ second compiler if you want that shape too.
     compiler serves the change. A short name that matches nothing in the
     Puppetfile, which r10k deploys nothing for and exits 0, **fails the
     deploy**; a long name (`puppetlabs/apache`) is refused with a hint before
-    r10k runs.
+    r10k runs. r10k's deploy record **still names the module's old commit**,
+    and `codavox provenance` names the new one, read from the module's own
+    `.git`.
 11. **Hung r10k.** A stand-in r10k that never returns is **killed at
     `--r10k-timeout`, its child with it**, the deploy fails naming the bound,
     and the next deploy runs at once because the lock was released.
@@ -90,7 +92,8 @@ second compiler if you want that shape too.
     environment and the short `code_id` it was compiled from**, and two
     compiles a second apart get the
     same label, where the standard control repo's script would print a
-    timestamp.
+    timestamp. On the publisher, **`codavox provenance <label>` finds the
+    control-repo commit and the module's**.
 15. **Revocation.** `puppetserver ca revoke` on a compiler's certificate **cuts
     off its access to code** — with no restart of the publisher, and while the
     certificate is still cryptographically valid and still carries its `pp_role`.

@@ -3,6 +3,7 @@ package publish
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -276,5 +277,181 @@ func TestProvenanceLookupIsolatesEnvAndCodeID(t *testing.T) {
 	}
 	if got := log.Lookup("basedir", "aaa"); len(got) != 0 {
 		t.Errorf("lookup for an unknown environment returned %d records, want 0", len(got))
+	}
+}
+
+const (
+	apacheSHA  = "a91c3e5f00112233445566778899aabbccddeeff"
+	controlSHA = "c0ffee00112233445566778899aabbccddeeff00"
+)
+
+// A git module's commit and origin are read from its own .git. The control
+// repo's .git at the environment root is the record's Commit, not a module, and
+// a checkout whose HEAD is not a bare id is listed with no commit rather than
+// one resolved by guessing.
+func TestProvenanceCapturesModules(t *testing.T) {
+	basedir := stageWithDeploy(t, "production", map[string]string{
+		"manifests/site.pp":                "node default { }\n",
+		".git/HEAD":                        controlSHA + "\n",
+		"modules/apache/manifests/init.pp": "class apache { }\n",
+		"modules/apache/.git/HEAD":         apacheSHA + "\n",
+		"modules/apache/.git/config": "[core]\n\tbare = false\n" +
+			"[remote \"cache\"]\n\turl = /var/cache/r10k/apache.git\n" +
+			"[remote \"origin\"]\n\turl = https://x-access-token:s3cret@github.com/voxpupuli/puppet-apache.git\n" +
+			"\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+		"modules/concat/manifests/init.pp":    "class concat { }\n",
+		"modules/concat/.git/HEAD":            "ref: refs/heads/main\n",
+		"modules/stdlib/manifests/init.pp":    "class stdlib { }\n",
+		"modules/stdlib/.git":                 "gitdir: /elsewhere\n",
+		"site-modules/role/manifests/init.pp": "class role { }\n",
+	}, `{"name":"production","signature":"`+controlSHA+`"}`)
+
+	s, log := sealWithProvenance(t, basedir, filepath.Join(t.TempDir(), "provenance.jsonl"))
+
+	recs := log.Lookup("production", s.Environments()["production"])
+	if len(recs) != 1 {
+		t.Fatalf("got %d records, want 1", len(recs))
+	}
+	want := []Module{
+		{Path: "modules/apache", Commit: apacheSHA, Remote: "https://github.com/voxpupuli/puppet-apache.git"},
+		{Path: "modules/concat"},
+		{Path: "modules/stdlib"},
+	}
+	if !slices.Equal(recs[0].Modules, want) {
+		t.Errorf("modules = %+v\nwant      %+v", recs[0].Modules, want)
+	}
+}
+
+// Two seals with the same commit but different module checkouts are different
+// sources, even when the trees match: the newest must say which modules it was
+// sealed from. Identical ones still add nothing, before and after a reopen.
+func TestProvenanceRecordComparesModules(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "provenance.jsonl")
+	log, err := OpenLog(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := []Module{{Path: "modules/apache", Commit: apacheSHA}}
+	second := []Module{{Path: "modules/apache", Commit: controlSHA}}
+	for _, mods := range [][]Module{first, first, second, second} {
+		if err := log.Record(Provenance{CodeID: "x", Env: "production", Commit: "cafe1234", Modules: mods}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := log.Lookup("production", "x")
+	if len(got) != 2 || !slices.Equal(got[0].Modules, second) {
+		t.Fatalf("lookup = %+v, want two records with the second modules newest", got)
+	}
+
+	reopened, err := OpenLog(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Record(Provenance{CodeID: "x", Env: "production", Commit: "cafe1234", Modules: second}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Lookup("production", "x"); len(got) != 2 {
+		t.Errorf("after reopen, got %d records, want 2", len(got))
+	}
+}
+
+// A log written before modules were captured has none in its newest record, so
+// the next reseal writes one that does rather than answering with none forever.
+func TestProvenanceBackfillsModulesIntoAnOlderLog(t *testing.T) {
+	basedir := stageWithDeploy(t, "production", map[string]string{
+		"manifests/site.pp":        "x\n",
+		"modules/apache/.git/HEAD": apacheSHA + "\n",
+	}, `{"name":"production","signature":"cafe1234"}`)
+
+	bare := NewStore(basedir, t.TempDir())
+	if err := bare.Reseal(); err != nil {
+		t.Fatal(err)
+	}
+	id := bare.Environments()["production"]
+
+	logPath := filepath.Join(t.TempDir(), "provenance.jsonl")
+	old := `{"code_id":"` + id + `","environment":"production","commit":"cafe1234","sealed_at":"2026-09-01T00:00:00Z"}` + "\n"
+	if err := os.WriteFile(logPath, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, log := sealWithProvenance(t, basedir, logPath)
+
+	recs := log.Lookup("production", id)
+	if len(recs) != 2 {
+		t.Fatalf("got %d records, want the old one plus one with modules", len(recs))
+	}
+	if want := []Module{{Path: "modules/apache", Commit: apacheSHA}}; !slices.Equal(recs[0].Modules, want) {
+		t.Errorf("newest modules = %+v, want %+v", recs[0].Modules, want)
+	}
+}
+
+func TestLogMatch(t *testing.T) {
+	log, err := OpenLog(filepath.Join(t.TempDir(), "provenance.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []Provenance{
+		{Env: "production", CodeID: "abc222", Commit: "c1"},
+		{Env: "production", CodeID: "abc111", Commit: "c2"},
+		{Env: "production", CodeID: "abc111", Commit: "c3"},
+		{Env: "production", CodeID: "def333", Commit: "c4"},
+		{Env: "testing", CodeID: "abc999", Commit: "c5"},
+	} {
+		if err := log.Record(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		env, prefix string
+		want        []string
+	}{
+		{"production", "abc", []string{"abc111", "abc222"}},
+		{"production", "abc111", []string{"abc111"}},
+		{"production", "def", []string{"def333"}},
+		{"production", "zzz", nil},
+		{"testing", "abc", []string{"abc999"}},
+		{"staging", "abc", nil},
+	} {
+		if got := log.Match(tc.env, tc.prefix); !slices.Equal(got, tc.want) {
+			t.Errorf("Match(%s, %s) = %v, want %v", tc.env, tc.prefix, got, tc.want)
+		}
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://github.com/voxpupuli/puppet-apache.git":        "https://github.com/voxpupuli/puppet-apache.git",
+		"https://x-access-token:s3cret@github.com/org/repo.git": "https://github.com/org/repo.git",
+		"https://glpat-s3cret@gitlab.example.com/org/repo.git":  "https://gitlab.example.com/org/repo.git",
+		"ssh://git@github.com/org/repo.git":                     "ssh://github.com/org/repo.git",
+		"git@github.com:org/repo.git":                           "git@github.com:org/repo.git",
+		"/srv/modules/apache":                                   "/srv/modules/apache",
+		"file:///srv/modules/apache":                            "file:///srv/modules/apache",
+		"https://user:s3cret@bad host/repo.git":                 "",
+	} {
+		if got := redactURL(in); got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestReadOrigin(t *testing.T) {
+	for name, tc := range map[string]struct{ config, want string }{
+		"canonical":                    {"[remote \"origin\"]\n\turl = https://example.com/a.git\n", "https://example.com/a.git"},
+		"section and key case":         {"[Remote \"origin\"]\n\tURL = https://example.com/a.git\n", "https://example.com/a.git"},
+		"quoted":                       {"[remote \"origin\"]\n\turl = \"https://example.com/a.git\"\n", "https://example.com/a.git"},
+		"comment":                      {"[remote \"origin\"]\n\turl = /srv/a # local\n", "/srv/a"},
+		"other remote only":            {"[remote \"cache\"]\n\turl = /var/cache/a.git\n", ""},
+		"subsection is case-sensitive": {"[remote \"Origin\"]\n\turl = /srv/a\n", ""},
+		"origin after another":         {"[remote \"cache\"]\n\turl = /var/cache/a.git\n[remote \"origin\"]\n\turl = /srv/a\n", "/srv/a"},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "config"), []byte(tc.config), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := readOrigin(dir); got != tc.want {
+			t.Errorf("%s: readOrigin = %q, want %q", name, got, tc.want)
+		}
 	}
 }
