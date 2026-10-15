@@ -286,7 +286,7 @@ compresses comparably; scale from your own control repo's size.
 | node | what it stores | how much |
 |---|---|---|
 | Publisher | one artifact per environment, current version only | `~20% of tree size × environments` |
-| Publisher | provenance log, one line per seal | a few hundred bytes per deploy, forever |
+| Publisher | provenance log, one line per seal | a few hundred bytes plus about 150 per git module, per deploy, forever |
 | Compiler | the current version plus `keep` superseded ones, per environment | `tree size × (keep + 1) × environments` |
 
 The rows are per *role*, not per machine. On [a primary that compiles its own
@@ -619,10 +619,11 @@ Almost nothing here is precious, by design:
 | **Provenance log** | **Not recoverable.** |
 
 The provenance log (`<state>/provenance.jsonl`) is the one thing worth backing
-up. It maps each `code_id` to the control-repo commit that produced it, and it
-is built from r10k's `.r10k-deploy.json` at seal time — so history for past
-deploys cannot be reconstructed after the fact. Losing it costs you the
-`COMMIT` column for old versions, nothing more; nothing stops working.
+up. It maps each `code_id` to the control-repo and module commits that produced
+it, and it is built from r10k's `.r10k-deploy.json` and each module's `.git` at
+seal time — so history for past deploys cannot be reconstructed after the fact.
+Losing it costs you the `COMMIT` column and `codavox provenance` for old
+versions, nothing more; nothing stops working.
 
 A rebuilt primary re-seals the same basedir to the **same `code_id`**,
 because sealing is reproducible. Compilers see no change and download nothing.

@@ -148,6 +148,7 @@ func (s *Store) Reseal() error {
 					Commit:     d.Signature,
 					DeployedAt: d.FinishedAt,
 					SealedAt:   time.Now().UTC(),
+					Modules:    readModules(envDir),
 				})
 			}
 		}

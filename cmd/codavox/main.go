@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,9 +95,13 @@ Usage:
         it, with the control-repo commit each code_id came from. Run this on
         the publisher, whose own certificate and provenance log it uses.
 
-  codavox provenance <environment> <code-id> [--state <dir>] [--json]
+  codavox provenance <environment> <code-id> | <label> [--modules]
+                     [--state <dir>] [--json]
         Print the control-repo commit that produced a code_id, read from the
-        publisher's local provenance log. Run this on the publisher.
+        publisher's local provenance log. The code_id may be a unique prefix,
+        and a catalog label (<environment>-<code-id>) names both at once. With
+        --modules, also print the commit of each git module. Run this on the
+        publisher.
 
   codavox version
         Print the codavox version.
@@ -1456,9 +1461,10 @@ func truncate(s string, n int) string {
 // dressed up as some other version's history.
 func provenanceQuery(args []string) error {
 	var (
-		state      = defaultStateDir()
-		asJSON     bool
-		positional []string
+		state       = defaultStateDir()
+		asJSON      bool
+		showModules bool
+		positional  []string
 	)
 
 	cfg, err := config.Load(configPath(args))
@@ -1482,6 +1488,8 @@ func provenanceQuery(args []string) error {
 			state = args[i]
 		case "--json":
 			asJSON = true
+		case "--modules":
+			showModules = true
 		default:
 			if strings.HasPrefix(a, "-") {
 				return fmt.Errorf("unknown flag %q", a)
@@ -1490,10 +1498,20 @@ func provenanceQuery(args []string) error {
 		}
 	}
 
-	if len(positional) != 2 {
-		return fmt.Errorf("provenance takes two arguments: <environment> <code-id>")
+	var env, codeID string
+	switch len(positional) {
+	case 1:
+		// A catalog label as config-version prints it. Environment names are
+		// \w+, so the label splits cleanly at its first '-'.
+		var ok bool
+		if env, codeID, ok = strings.Cut(positional[0], "-"); !ok {
+			return errProvenanceArgs
+		}
+	case 2:
+		env, codeID = positional[0], positional[1]
+	default:
+		return errProvenanceArgs
 	}
-	env, codeID := positional[0], positional[1]
 	if err := layout.ValidateEnvironment(env); err != nil {
 		return err
 	}
@@ -1503,6 +1521,9 @@ func provenanceQuery(args []string) error {
 
 	log, err := publish.OpenLog(filepath.Join(state, provenanceFile))
 	if err != nil {
+		return err
+	}
+	if codeID, err = resolveCodeID(log, env, codeID); err != nil {
 		return err
 	}
 	records := log.Lookup(env, codeID)
@@ -1530,6 +1551,51 @@ func provenanceQuery(args []string) error {
 			deployed = "unknown"
 		}
 		fmt.Printf("%s\tdeployed %s\tsealed %s\n", commit, deployed, p.SealedAt.Format(time.RFC3339))
+		if showModules {
+			printModules(p.Modules)
+		}
 	}
 	return nil
+}
+
+var errProvenanceArgs = errors.New("provenance takes <environment> <code-id>, or a catalog label <environment>-<code-id>")
+
+// resolveCodeID turns what an operator has in hand, a full code_id or the short
+// one a catalog label shows, into the code_id it names in env.
+//
+// An exact match wins, and a prefix that matches nothing is returned as given,
+// so the lookup reports honestly that nothing was recorded. A prefix that
+// matches several is refused: picking one would answer with a version the
+// report may not have meant.
+func resolveCodeID(log *publish.Log, env, id string) (string, error) {
+	matches := log.Match(env, id)
+	switch {
+	case len(matches) == 0 || slices.Contains(matches, id):
+		return id, nil
+	case len(matches) == 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("code_id %s is ambiguous in %s, matching %s",
+			id, env, strings.Join(matches, ", "))
+	}
+}
+
+// printModules lists a record's git modules beneath it.
+func printModules(mods []publish.Module) {
+	if len(mods) == 0 {
+		// Either the tree has no git modules or the record predates their
+		// capture. Both mean the same thing here: none were recorded.
+		fmt.Println("  no git modules recorded")
+		return
+	}
+	for _, m := range mods {
+		commit, remote := m.Commit, m.Remote
+		if commit == "" {
+			commit = "(unknown commit)"
+		}
+		if remote == "" {
+			remote = "-"
+		}
+		fmt.Printf("  %s\t%s\t%s\n", m.Path, commit, remote)
+	}
 }

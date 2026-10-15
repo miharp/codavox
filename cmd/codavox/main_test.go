@@ -225,12 +225,85 @@ func TestConfigDrivesCommandState(t *testing.T) {
 	}
 }
 
+// A report's run log shows the catalog label, not the full code_id, so the
+// label and any unique prefix must find the version. A prefix that matches
+// several is refused rather than answered with one of them.
+func TestProvenanceSubcommandResolvesLabelsAndPrefixes(t *testing.T) {
+	var (
+		labeled = "a3f1c9e4b2d8" + strings.Repeat("a", 52)
+		twin1   = "dddd00000000" + strings.Repeat("1", 52)
+		twin2   = "dddd00000000" + strings.Repeat("2", 52)
+		sha     = strings.Repeat("e", 40)
+	)
+	state := t.TempDir()
+	log := `{"code_id":"` + labeled + `","environment":"production","commit":"cafef00d","sealed_at":"2026-07-24T16:00:00Z",` +
+		`"modules":[{"path":"modules/apache","commit":"` + sha + `","remote":"https://github.com/voxpupuli/puppet-apache.git"},` +
+		`{"path":"modules/concat"}]}` + "\n" +
+		`{"code_id":"` + twin1 + `","environment":"production","commit":"0ne0ne01","sealed_at":"2026-07-25T16:00:00Z"}` + "\n" +
+		`{"code_id":"` + twin2 + `","environment":"production","commit":"7w07w002","sealed_at":"2026-07-26T16:00:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(state, provenanceFile), []byte(log), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	query := func(args ...string) (string, error) {
+		return captureStdout(t, func() error {
+			return run("provenance", append(args, "--state", state))
+		})
+	}
+
+	for name, args := range map[string][]string{
+		"label":     {"production-a3f1c9e4b2d8"},
+		"prefix":    {"production", "a3f1"},
+		"full id":   {"production", labeled},
+		"long twin": {"production", "dddd000000001"},
+	} {
+		out, err := query(args...)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		want := "cafef00d"
+		if name == "long twin" {
+			want = "0ne0ne01"
+		}
+		if !strings.HasPrefix(out, want+"\t") {
+			t.Errorf("%s: output %q, want the record for %s", name, out, want)
+		}
+	}
+
+	_, err := query("production-dddd00000000")
+	if err == nil || !strings.Contains(err.Error(), twin1) || !strings.Contains(err.Error(), twin2) {
+		t.Errorf("ambiguous label: err = %v, want one naming both code_ids", err)
+	}
+
+	out, err := query("production-a3f1c9e4b2d8", "--modules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"  modules/apache\t" + sha + "\thttps://github.com/voxpupuli/puppet-apache.git\n",
+		"  modules/concat\t(unknown commit)\t-\n",
+	} {
+		if !strings.Contains(out, line) {
+			t.Errorf("--modules output %q lacks %q", out, line)
+		}
+	}
+	out, err = query("production", twin1, "--modules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "  no git modules recorded\n") {
+		t.Errorf("a record without modules printed %q", out)
+	}
+}
+
 func TestProvenanceSubcommandRejectsBadArgs(t *testing.T) {
 	cases := map[string][]string{
-		"one argument":        {"production"},
-		"unknown flag":        {"production", "id", "--bogus"},
-		"invalid environment": {"Bad Env!", "abc"},
-		"invalid code_id":     {"production", "bad/id"},
+		"one argument":          {"production"},
+		"three arguments":       {"production", "abc", "def"},
+		"label with no code_id": {"production-"},
+		"unknown flag":          {"production", "id", "--bogus"},
+		"invalid environment":   {"Bad Env!", "abc"},
+		"invalid code_id":       {"production", "bad/id"},
 	}
 	for name, args := range cases {
 		if err := run("provenance", args); err == nil {

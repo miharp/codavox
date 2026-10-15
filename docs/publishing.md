@@ -339,9 +339,10 @@ The publisher closes that gap. When it seals an environment it reads r10k's
 ```
 
 Each line maps an environment's `code_id` to the control-repo commit
-(`signature`), r10k's deploy timestamp, and when the publisher sealed it. A
-reseal that finds the same commit as that environment's newest record adds
-nothing. Query it with [`codavox provenance`](commands.md#codavox-provenance).
+(`signature`), r10k's deploy timestamp, when the publisher sealed it, and the
+commit of each git module in the tree. A reseal that finds the same commits as
+that environment's newest record adds nothing. Query it with
+[`codavox provenance`](commands.md#codavox-provenance).
 
 Three properties are deliberate:
 
@@ -360,6 +361,61 @@ Three properties are deliberate:
   success. Provenance is diagnostic metadata, and its honest absence — reported
   as "no provenance recorded" — is the correct answer, never a stand-in from a
   different version.
+
+### Module commits
+
+A control-repo commit pins a module only when its Puppetfile entry is
+immutable. A `:branch`, or a tag that moves, resolves to whatever the remote
+held at deploy time, so the control-repo commit alone cannot say which module
+code a `code_id` contains. By the time anyone asks, the tree is usually gone as
+well: the publisher keeps only the current artifact, and compilers reap
+superseded versions.
+
+So the publisher also records each git module's commit. r10k clones every git
+module with its own `.git` and checks out the resolved commit as a detached
+`HEAD`. The publisher reads `HEAD` and `remote.origin.url` from each `.git`
+below the environment, from disk, the same way it reads `.r10k-deploy.json`:
+the tree still has them, and sealing still excludes them. The environment's own
+`.git` is the control repo, whose commit is already recorded.
+
+It deliberately ignores the `module_deploys` list r10k writes into
+`.r10k-deploy.json`. `r10k deploy module`, which
+[`codavox deploy --modules`](deploying.md#deploying-only-some-modules) runs,
+re-resolves a module without rewriting that file, so after a module deploy the
+list still names the module's previous commit. Each module's `HEAD` describes
+the tree being sealed, whichever path deployed it.
+
+- **A `HEAD` that is not a commit** records the module with no commit. r10k
+  never leaves a branch reference there, and resolving one would be guessing.
+- **Credentials are removed** from the remote URL (`https://<token>@host/…`),
+  because `codavox provenance` prints it.
+- **Forge modules are not listed.** Nothing on disk tells one apart from a
+  module committed to the control repo. Forge releases are immutable, so a
+  pinned version is already answered by the Puppetfile at the recorded
+  control-repo commit; an unpinned one is the gap.
+
+### Proving where a version came from
+
+The log records what the publisher observed. Because sealing is
+[reproducible](sealing.md#verifying-reproducibility), you can prove it rather
+than trust it: rebuild the tree from the recorded commits and seal it.
+
+```console
+$ codavox provenance production-3224ddbe7e3d --modules
+5f2e9c19eb03db14be61df036f5b2af3e377f290    deployed 2026-07-24 12:00:00 -0400    sealed 2026-07-24T16:00:00Z
+  modules/apache    8c1d2e4f0a9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d    https://github.com/voxpupuli/puppet-apache.git
+$ git clone -q <control-repo> /tmp/prove && git -C /tmp/prove checkout -q 5f2e9c19eb03
+$ git clone -q https://github.com/voxpupuli/puppet-apache.git /tmp/prove/modules/apache \
+    && git -C /tmp/prove/modules/apache checkout -q 8c1d2e4f0a9b
+$ codavox seal /tmp/prove
+3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb
+```
+
+Install each Forge module at the version the Puppetfile names, and reproduce
+anything else your deploy writes into the tree, such as the `.resource_types`
+directory from r10k's `generate_types`. A matching `code_id` proves those
+commits are exactly the code that was served. A different one means the trees
+differ, and the manifests say where.
 
 ## Testing it
 

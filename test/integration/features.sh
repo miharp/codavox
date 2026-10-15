@@ -333,6 +333,7 @@ fi
 # short name that matches nothing, and a long name it would never match — are
 # both refused rather than reported as deployed.
 log "Feature 10 — deploy --modules re-resolves one module, and refuses what r10k would ignore"
+old_sha=$(docker exec "$PRIMARY" git -C /srv/modules/apache rev-parse HEAD)
 docker exec "$PRIMARY" bash -lc \
   "cd /srv/modules/apache && echo '# module change $(date +%s%N)' >> manifests/init.pp && git commit -qam 'apache 2'"
 before=$(code_id "$COMPILER" production)
@@ -346,6 +347,23 @@ if wait_for 60 "$COMPILER" "grep -q 'module change' /opt/puppetlabs/codavox/envi
   pass "the compiler serves the re-resolved module ($before -> $(code_id "$COMPILER" production))"
 else
   fail "the module change never reached the compiler"
+fi
+# r10k's deploy record lists each module's commit, but `r10k deploy module`
+# does not rewrite it, so after a module deploy it still names the old one.
+# That is the hazard; provenance reading the module's own .git is the fix.
+new_sha=$(docker exec "$PRIMARY" git -C /srv/modules/apache rev-parse HEAD)
+deploy_record=/etc/puppetlabs/code/environments/production/.r10k-deploy.json
+if docker exec "$PRIMARY" grep -qF "$old_sha" "$deploy_record" \
+  && ! docker exec "$PRIMARY" grep -qF "$new_sha" "$deploy_record"; then
+  pass "r10k's deploy record still names the module's old commit after a module deploy"
+else
+  fail "expected $deploy_record to name $old_sha and not $new_sha after deploy --modules"
+fi
+if out=$(docker exec "$PRIMARY" codavox provenance production "$(code_id "$COMPILER" production)" --modules 2>&1) \
+  && printf '%s\n' "$out" | grep -qF "  modules/apache"$'\t'"$new_sha"; then
+  pass "provenance names the module's new commit, read from its checkout"
+else
+  fail "provenance does not name modules/apache at $new_sha: $(printf '%s' "$out" | tr '\n' ' ')"
 fi
 if out=$(docker exec "$PRIMARY" codavox deploy production --modules nosuchmodule 2>&1); then
   fail "deploy --modules nosuchmodule exited 0 (r10k deploys nothing and exits 0 for it; codavox must not)"
@@ -520,6 +538,17 @@ if out=$(docker exec "$PRIMARY" codavox deploy production --wait 2>&1) \
     pass "the catalog carries the label as its version"
   else
     fail "the catalog's version is '$stamped', want '$want'"
+  fi
+  # The label is what a run log or a report shows. On the publisher it must
+  # find the control-repo commit and the module's, with no full code_id.
+  control_sha=$(docker exec "$PRIMARY" git -C /srv/control rev-parse HEAD)
+  apache_sha=$(docker exec "$PRIMARY" git -C /srv/modules/apache rev-parse HEAD)
+  if out=$(docker exec "$PRIMARY" codavox provenance "$stamped" --modules 2>&1) \
+    && printf '%s\n' "$out" | grep -q "^$control_sha" \
+    && printf '%s\n' "$out" | grep -qF "  modules/apache"$'\t'"$apache_sha"$'\t'"/srv/modules/apache"; then
+    pass "the label $stamped finds the control-repo commit and the module's"
+  else
+    fail "provenance $stamped did not name $control_sha and modules/apache at $apache_sha: $(printf '%s' "$out" | tr '\n' ' ')"
   fi
 else
   fail "the config_version change did not reach the compiler: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"

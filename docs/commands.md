@@ -346,28 +346,55 @@ The same data is available directly at
 ## `codavox provenance`
 
 ```text
-codavox provenance <environment> <code-id> [--state <dir>] [--json]
+codavox provenance <environment> <code-id> [--modules] [--state <dir>] [--json]
+codavox provenance <label> [--modules] [--state <dir>] [--json]
 ```
 
-Prints the control-repo commit that produced a `code_id`, read from the
-publisher's local provenance log. **Run it on the publisher** — it reads
-`<state>/provenance.jsonl` directly and does no network I/O.
+Prints the control-repo commit that produced a `code_id`, and with `--modules`
+the commit of each git module in it, read from the publisher's local provenance
+log. **Run it on the publisher** — it reads `<state>/provenance.jsonl` directly
+and does no network I/O.
 
 ```console
 $ codavox provenance production 3224ddbe7e3d05fe236823b4596fac8eeebc9ceb38c47d551de912b496884beb
 5f2e9c19eb03db14be61df036f5b2af3e377f290    deployed 2026-07-24 12:00:00 -0400    sealed 2026-07-24T16:00:00Z
 ```
 
-The usual troubleshooting path: read a puzzling compiler's version with
-`codavox code-id`, then ask the publisher which commit that content came from.
+The usual troubleshooting path: take the version from a puzzling compiler's
+`codavox code-id`, or the catalog label from a run report, and ask the
+publisher which commits that content came from.
+
+The `code_id` can be any prefix that matches only one recorded version, and a
+catalog label as [`config-version`](#codavox-config-version) prints it names
+the environment and the prefix at once. A prefix that matches several versions
+is an error naming each of them, never a guess:
+
+```console
+$ codavox provenance production-3224ddbe7e3d --modules
+5f2e9c19eb03db14be61df036f5b2af3e377f290    deployed 2026-07-24 12:00:00 -0400    sealed 2026-07-24T16:00:00Z
+  modules/apache    8c1d2e4f0a9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d    https://github.com/voxpupuli/puppet-apache.git
+  modules/firewall  2b7e9f1a4c3d5e6f708192a3b4c5d6e7f8091a2b    https://github.com/voxpupuli/puppet-firewall.git
+```
+
+`--modules` lists each git checkout in the tree with its path, commit, and
+origin URL, credentials removed. A module whose checkout was not at a plain
+commit shows `(unknown commit)`. A record shows `no git modules recorded` when
+the tree has none, or when an earlier codavox wrote it. Forge modules are not
+listed; see [Module commits](publishing.md#module-commits) for why.
+
+`deployed` is r10k's own timestamp from `.r10k-deploy.json`. `r10k deploy
+module`, which `codavox deploy --modules` runs, does not rewrite that file, so
+after a module deploy `deployed` still shows the last full deploy of the
+environment. `sealed` is when the publisher sealed this version.
 
 Because a commit that leaves resolved content unchanged seals to the same
 `code_id`, one id can list several commits, printed most recently sealed first.
 A commit is listed again when the environment returns to it after another, so
 the first line is always the commit the environment was last deployed from.
 
-`--json` emits the records as an array for scripting. `--state` overrides the
-state directory (default `<root>/state`, honoring `CODAVOX_ROOT`).
+`--json` emits the records as an array for scripting, modules included.
+`--state` overrides the state directory (default `<root>/state`, honoring
+`CODAVOX_ROOT`).
 
 A `code_id` with no recorded provenance is not an error: the command prints
 `no provenance recorded` to stderr and exits `0`, because provenance is
