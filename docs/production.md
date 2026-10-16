@@ -606,6 +606,28 @@ restart or at the next deploy.
 [`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
 pin `codavox::package_ensure: '0.10.0'`.
 
+### Upgrading to 0.11
+
+Nothing about the artifact format or the `code_id` derivation changed, so no
+environment is re-downloaded, and nothing has to change first.
+
+**Provenance records module commits.** The publisher now records the commit of
+each git module in a sealed tree, read from the module's own `.git`, so
+[`codavox provenance --modules`](commands.md#codavox-provenance) can say which
+module code a version contains, not only which control-repo commit. The
+upgraded publisher's first reseal, when it restarts, writes a record with
+modules for every environment's current version; versions sealed before the
+upgrade keep none. Each record grows by about 150 bytes per git module, so the
+log grows faster for a control repo with many of them (see [Disk](#disk)).
+
+**`codavox provenance` takes what a report shows.** Besides the full `code_id`,
+it accepts the catalog label (`production-a3f1c9e4b2d8`) or any prefix that
+names one version. Its `--json` output gains a `modules` array and is
+otherwise unchanged.
+
+[`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
+pin `codavox::package_ensure: '0.11.0'`.
+
 ## Backup and rebuild
 
 Almost nothing here is precious, by design:
