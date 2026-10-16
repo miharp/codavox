@@ -80,8 +80,8 @@ apt-get update && apt-get install codavox
 ```
 
 Both architectures are in the one repository; the package manager picks the
-host's. Pin a version with `dnf install codavox-0.10.0` or
-`apt-get install codavox=0.10.0`, and upgrade with the package manager as you
+host's. Pin a version with `dnf install codavox-0.11.0` or
+`apt-get install codavox=0.11.0`, and upgrade with the package manager as you
 would any other package.
 
 The repository is [harpworks](https://packages.harpworks.org), which serves
@@ -104,12 +104,12 @@ removal when installing from a file, but neither can upgrade it for you. Set
 `VERSION` to the release you want:
 
 ```console
-VERSION=0.10.0
+VERSION=0.11.0
 dnf install "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.rpm"
 ```
 
 ```console
-VERSION=0.10.0
+VERSION=0.11.0
 curl -fsSLO "https://github.com/miharp/codavox/releases/download/v$VERSION/codavox_${VERSION}_linux_arm64.deb"
 apt-get install -y "./codavox_${VERSION}_linux_arm64.deb"
 ```
