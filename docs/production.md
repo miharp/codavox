@@ -628,6 +628,32 @@ otherwise unchanged.
 [`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
 pin `codavox::package_ensure: '0.11.0'`.
 
+### Upgrading to 0.11.1
+
+Nothing about the artifact format or the `code_id` derivation changed, so no
+environment is re-downloaded, and nothing has to change first. 0.11.1 is built
+with Go 1.26.10, which fixes a `crypto/x509` vulnerability (GO-2026-6809) in the
+certificate verification every mutual TLS connection makes, so upgrade
+promptly.
+
+**An owed cache flush now outlives the agent.** When the environment cache
+flush after a swap fails, the agent records it in
+`/opt/puppetlabs/codavox/flush-owed/` and retries it from its next process too.
+`codavox agent --once`, from a timer or an orchestrator, no longer reports
+success while OpenVox Server compiles the old tree; see
+[Running on demand](agent.md#running-on-demand). The directory is created on
+the first swap.
+
+A 0.11.0 agent kept that record in memory only, so restarting it onto 0.11.1
+drops any flush it still owed. If its log shows `environment cache flush failed`
+for an environment with no later `environment cache flushed`, expire that
+environment after the restart, with the `DELETE` in
+[Expiring the environment cache](agent.md#expiring-the-environment-cache), or
+restart `puppetserver`.
+
+[`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
+pin `codavox::package_ensure: '0.11.1'`.
+
 ## Backup and rebuild
 
 Almost nothing here is precious, by design:
