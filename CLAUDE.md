@@ -98,10 +98,11 @@ argument, and each is defended by a test or a doc.
   every static catalog compile with no caching (measured 83 ms Ruby → 3.2 ms).
   No git, directory walk, lock, or JSON parsing on that path.
   `BenchmarkCurrentCodeID` guards it.
-- **The symlink is the only source of truth.** There is no separate state file.
-  `code-id` derives from the same symlink OpenVox Server reads, so one
-  `rename(2)` changes both what is served and what is reported at the same
-  instant. Two sources of truth have no safe swap ordering.
+- **The symlink is the only source of truth.** There is no separate state file
+  for what is served (`flush-owed/` records work left to do, and `code-id`
+  never reads it). `code-id` derives from the same symlink OpenVox Server
+  reads, so one `rename(2)` changes both what is served and what is reported
+  at the same instant. Two sources of truth have no safe swap ordering.
 - **The compiler-side commands are silent on success.** OpenVox Server logs
   anything written to stderr at ERROR level *even when the exit code is 0*, once
   per compile. `config-version` is stricter still: OpenVox merges its stderr
@@ -140,9 +141,11 @@ argument, and each is defended by a test or a doc.
   sends `DELETE /puppet-admin-api/v1/environment-cache?environment=<env>` to
   the server on its own node after every swap and prune. A refused flush fails
   the reconciliation and stays owed until it lands; the swap is never rolled
-  back. The harness proves the hazard before proving the fix
-  (`environment_timeout = unlimited`, flush off → stale catalog; flush on →
-  current).
+  back. The debt is written to `flush-owed/<env>` *before* the link moves, so
+  it survives the process — `agent --once` is a new one every run — and a debt
+  that cannot be written stops the swap. The harness proves the hazard before
+  proving the fix (`environment_timeout = unlimited`, flush off → stale
+  catalog; flush on → current).
 - **One broken environment must not stop the others.** `Store.Reseal` and the
   agent's `Once` both isolate per-environment failures: the failed environment
   keeps its last good version and is reported, while the rest converge. Refusing

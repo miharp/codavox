@@ -76,12 +76,13 @@ type Agent struct {
 	// it, so a single agent loop owns it and Once stays free of logging state.
 	syncFailures failureLog
 
-	// pendingFlush names the environments whose OpenVox Server cache is owed a
-	// flush: swapped or pruned, but not yet expired server-side. An entry
-	// outlives a failed flush so the next poll retries it — a swap cannot be
-	// undone once the symlink has moved, and until the flush lands the server
-	// keeps compiling the old tree while code-id reports the new one. Only Once
-	// touches it, from the single loop that owns the agent.
+	// pendingFlush names the environments whose OpenVox Server cache this
+	// process owes a flush: swapped or pruned, but not yet expired server-side.
+	// An entry outlives a failed flush so the next poll retries it — a swap
+	// cannot be undone once the symlink has moved, and until the flush lands the
+	// server keeps compiling the old tree while code-id reports the new one.
+	// Each entry is also on disk under FlushOwedDir; see oweFlush for why both.
+	// Only Once touches it, from the single loop that owns the agent.
 	pendingFlush map[string]bool
 }
 
@@ -175,7 +176,6 @@ func (a *Agent) Once(ctx context.Context) error {
 		}
 		if changed {
 			moved = true
-			a.oweFlush(env)
 			a.cfg.Logger.Info("environment updated", "environment", env, "code_id", codeID)
 		}
 		if err := a.reap(env, codeID); err != nil {
@@ -191,11 +191,8 @@ func (a *Agent) Once(ctx context.Context) error {
 	// a publisher outage is never mistaken for "every environment was deleted."
 	// It is independent of per-environment sync failures: a failed sync leaves
 	// the environment in want, so it is never a prune candidate.
-	if a.cfg.Prune {
-		for _, env := range a.prune(want) {
-			moved = true
-			a.oweFlush(env)
-		}
+	if a.cfg.Prune && len(a.prune(want)) > 0 {
+		moved = true
 	}
 
 	// Expire what OpenVox Server has cached for every environment that moved,
@@ -205,7 +202,7 @@ func (a *Agent) Once(ctx context.Context) error {
 	// code_id, so a catalog would carry a code_id that does not describe it.
 	// That is the silent mismatch static catalogs exist to prevent, so a
 	// failed flush fails the reconciliation, and stays owed until it lands.
-	unflushed := a.flushPending(ctx)
+	unflushed, owedErr := a.flushPending(ctx)
 
 	// Tell the publisher what this node now serves, rather than leaving it to
 	// be noticed on the next poll. The poll above reported the state *before*
@@ -229,6 +226,9 @@ func (a *Agent) Once(ctx context.Context) error {
 	if len(unflushed) > 0 {
 		problems = append(problems, "failed to flush the environment cache for: "+strings.Join(unflushed, ", "))
 	}
+	if owedErr != nil {
+		problems = append(problems, owedErr.Error())
+	}
 	if len(problems) > 0 {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
@@ -237,31 +237,106 @@ func (a *Agent) Once(ctx context.Context) error {
 
 // oweFlush records that env's server-side cache must be expired before this
 // node is fully converged. With no PuppetServer configured nothing is ever owed.
-func (a *Agent) oweFlush(env string) {
+//
+// Callers record the flush before moving the link, not after: a process that
+// dies between the two must leave the obligation behind, and a flush that
+// cannot be recorded means the link must not move at all.
+//
+// The record is kept twice. The file under FlushOwedDir is what lets it outlive
+// this process: agent --once is a new process every run, and without the file
+// the run after a failed flush would find nothing moved, owe nothing, and exit
+// 0 while the server compiled the old tree. The entry in pendingFlush is what
+// stops a concurrent agent losing it: that one can flush and clear the file in
+// the moment between this call and the swap, when there was nothing new to
+// expire yet.
+func (a *Agent) oweFlush(env string) error {
 	if a.cfg.PuppetServer == "" {
-		return
-	}
-	a.pendingFlush[env] = true
-}
-
-// flushPending expires every environment owed a flush, returning the ones still
-// owed afterwards, sorted.
-func (a *Agent) flushPending(ctx context.Context) []string {
-	if len(a.pendingFlush) == 0 {
 		return nil
 	}
-	var unflushed []string
+	if err := a.recordOwed(env); err != nil {
+		return err
+	}
+	a.pendingFlush[env] = true
+	return nil
+}
+
+// recordOwed writes env's file under FlushOwedDir.
+//
+// It is not fsynced. The record only has to outlive the agent process: a
+// machine that goes down takes OpenVox Server and its cache with it, and the
+// server it boots has nothing cached to flush.
+func (a *Agent) recordOwed(env string) error {
+	dir := a.cfg.Layout.FlushOwedDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("recording owed cache flush: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, env), nil, 0o600); err != nil {
+		return fmt.Errorf("recording owed cache flush: %w", err)
+	}
+	return nil
+}
+
+// owedOnDisk lists the environments recorded under FlushOwedDir, by this
+// process or an earlier one. Entries that are not regular files named for a
+// valid environment were not written by the agent and are skipped.
+func (a *Agent) owedOnDisk() ([]string, error) {
+	entries, err := os.ReadDir(a.cfg.Layout.FlushOwedDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading owed cache flushes: %w", err)
+	}
+	var envs []string
+	for _, e := range entries {
+		if !e.Type().IsRegular() || layout.ValidateEnvironment(e.Name()) != nil {
+			continue
+		}
+		envs = append(envs, e.Name())
+	}
+	return envs, nil
+}
+
+// flushPending expires every environment owed a flush, by this process or an
+// earlier one, returning the ones still owed afterwards, sorted. An error means
+// the record on disk could not be read; what this process owes is still
+// flushed.
+func (a *Agent) flushPending(ctx context.Context) ([]string, error) {
+	if a.cfg.PuppetServer == "" {
+		return nil, nil
+	}
+	owed := make(map[string]bool, len(a.pendingFlush))
 	for env := range a.pendingFlush {
+		owed[env] = true
+	}
+	onDisk, readErr := a.owedOnDisk()
+	for _, env := range onDisk {
+		owed[env] = true
+	}
+
+	var unflushed []string
+	for env := range owed {
 		if err := a.flushEnvironmentCache(ctx, env); err != nil {
 			a.cfg.Logger.Error("environment cache flush failed", "environment", env, "error", err)
+			a.pendingFlush[env] = true
+			// A concurrent agent may have cleared the file after a flush of its
+			// own that came before this process's swap. Write it back so the
+			// next process still knows.
+			if err := a.recordOwed(env); err != nil {
+				a.cfg.Logger.Warn("re-recording owed cache flush failed", "environment", env, "error", err)
+			}
 			unflushed = append(unflushed, env)
 			continue
 		}
 		delete(a.pendingFlush, env)
+		// A file left behind costs one extra flush on the next run, nothing more.
+		if err := os.Remove(filepath.Join(a.cfg.Layout.FlushOwedDir(), env)); err != nil && !os.IsNotExist(err) {
+			a.cfg.Logger.Warn("clearing owed cache flush failed", "environment", env, "error", err)
+		}
 		a.cfg.Logger.Info("environment cache flushed", "environment", env)
 	}
 	sort.Strings(unflushed)
-	return unflushed
+	return unflushed, readErr
 }
 
 // flushEnvironmentCache asks this node's OpenVox Server to expire one cached
@@ -412,6 +487,9 @@ func (a *Agent) sync(ctx context.Context, env, codeID string) (bool, error) {
 		}
 	}
 
+	if err := a.oweFlush(env); err != nil {
+		return false, err
+	}
 	if err := a.swap(env, codeID); err != nil {
 		return false, err
 	}
@@ -642,8 +720,9 @@ func (a *Agent) reapStaleExtractions() {
 // directory, than deliberately deleting every environment at once. Deleting the
 // last environment stays a manual action.
 // It returns the environments it removed, so the caller can re-state what this
-// node serves — a pruned environment leaves the set the agent reports — and
-// expire what OpenVox Server had cached for each.
+// node serves: a pruned environment leaves the set the agent reports. Each one
+// is owed a flush, recorded before its link goes, so OpenVox Server stops
+// compiling its cached copy.
 func (a *Agent) prune(want map[string]string) []string {
 	if len(want) == 0 {
 		a.cfg.Logger.Warn("publisher advertised no environments; skipping prune")
@@ -657,6 +736,10 @@ func (a *Agent) prune(want map[string]string) []string {
 	var removed []string
 	for _, env := range local {
 		if _, kept := want[env]; kept {
+			continue
+		}
+		if err := a.oweFlush(env); err != nil {
+			a.cfg.Logger.Warn("pruning environment failed", "environment", env, "error", err)
 			continue
 		}
 		if err := a.pruneEnvironment(env); err != nil {

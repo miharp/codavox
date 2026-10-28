@@ -517,6 +517,7 @@ verified interface.
 ```text
 /opt/puppetlabs/codavox/
   versions/<env>_<code_id>/     unpacked environment trees
+  flush-owed/<env>              environment cache flushes the agent still owes
 
 /opt/puppetlabs/codavox/environments/<env>
     -> /opt/puppetlabs/codavox/versions/<env>_<code_id>
@@ -538,6 +539,10 @@ what OpenVox Server serves and what `code-id` reports at the same instant.
 
 Old version directories are retained so `code-content` can answer for a
 `code_id` an in-flight agent run is still using.
+
+`flush-owed/` records work left to do, not which version is served, and
+`code-id` never reads it. See
+[A failed flush is a failed reconciliation](agent.md#a-failed-flush-is-a-failed-reconciliation).
 
 ---
 

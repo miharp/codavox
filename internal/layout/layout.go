@@ -102,6 +102,14 @@ func (l Layout) EnvironmentLink(env string) string {
 	return filepath.Join(l.EnvironmentPath, env)
 }
 
+// FlushOwedDir holds an empty file for each environment whose OpenVox Server
+// cache the agent still owes a flush. It records work left to do, not which
+// version is served, so it is not a second source of truth: code-id never
+// reads it.
+func (l Layout) FlushOwedDir() string {
+	return filepath.Join(l.Root, "flush-owed")
+}
+
 // CurrentCodeID returns the code_id an environment is currently serving.
 //
 // The answer is derived from the environment symlink rather than from a

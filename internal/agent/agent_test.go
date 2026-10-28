@@ -628,6 +628,108 @@ func TestFailedFlushFailsTheSyncAndIsRetried(t *testing.T) {
 	}
 }
 
+// agent --once is a new process every run, so an owed flush that lived only in
+// memory died with the run that failed it. The next run found everything at
+// its code_id, owed nothing, and exited 0 while the server compiled the old
+// tree under the new code_id.
+func TestOwedFlushOutlivesTheProcess(t *testing.T) {
+	f := newFixture(t)
+	ps := newCacheFlushRecorder(t)
+	ps.status = http.StatusForbidden
+	f.agent.cfg.PuppetServer = ps.URL
+
+	f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "node default { }\n"})
+	if err := f.agent.Once(context.Background()); err == nil {
+		t.Fatal("Once succeeded although the environment cache flush was refused")
+	}
+
+	next, err := New(f.agent.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps.status = http.StatusNoContent
+	ps.flushed = nil
+	if err := next.Once(context.Background()); err != nil {
+		t.Fatalf("Once in a new process: %v", err)
+	}
+	if want := []string{"production"}; !reflect.DeepEqual(ps.flushed, want) {
+		t.Errorf("a new process flushed %v, want %v: the failed flush was forgotten", ps.flushed, want)
+	}
+
+	// Paid off on disk too, so the process after that owes nothing.
+	last, err := New(f.agent.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps.flushed = nil
+	if err := last.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(ps.flushed) != 0 {
+		t.Errorf("an already-flushed environment was flushed again: %v", ps.flushed)
+	}
+}
+
+// The flush is recorded before the symlink moves. A swap the agent could not
+// record would leave nothing to retry the flush if this process then died, so
+// it does not swap at all, and the environment keeps the version the server
+// has cached.
+func TestFlushThatCannotBeRecordedRefusesTheSwap(t *testing.T) {
+	f := newFixture(t)
+	ps := newCacheFlushRecorder(t)
+	f.agent.cfg.PuppetServer = ps.URL
+
+	// A file where the directory belongs makes the record impossible to write.
+	if err := os.MkdirAll(f.layout.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.layout.FlushOwedDir(), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f.publishEnv(t, "production", map[string]string{"manifests/site.pp": "node default { }\n"})
+	if err := f.agent.Once(context.Background()); err == nil {
+		t.Fatal("Once succeeded although the owed flush could not be recorded")
+	}
+	if _, err := os.Lstat(f.layout.EnvironmentLink("production")); !os.IsNotExist(err) {
+		t.Errorf("environment link exists (err=%v); the swap must not happen before the flush is recorded", err)
+	}
+}
+
+// Agents tolerate a second process running beside them. That one can flush an
+// environment and clear its file in the moment between this process recording
+// the flush and swapping the link, when there was nothing new to expire yet.
+// The flush this process owes must survive that.
+func TestOwedFlushSurvivesAConcurrentAgentClearingIt(t *testing.T) {
+	f := newFixture(t)
+	ps := newCacheFlushRecorder(t)
+	ps.status = http.StatusForbidden
+	f.agent.cfg.PuppetServer = ps.URL
+
+	if err := f.agent.oweFlush("production"); err != nil {
+		t.Fatal(err)
+	}
+	owed := filepath.Join(f.layout.FlushOwedDir(), "production")
+	if err := os.Remove(owed); err != nil {
+		t.Fatalf("the flush was not recorded on disk: %v", err)
+	}
+
+	unflushed, err := f.agent.flushPending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"production"}; !reflect.DeepEqual(ps.flushed, want) {
+		t.Errorf("flushed %v, want %v: the flush this process owed was lost", ps.flushed, want)
+	}
+	// Still refused, so it is still owed, and on disk again for the next process.
+	if want := []string{"production"}; !reflect.DeepEqual(unflushed, want) {
+		t.Errorf("still owed %v, want %v", unflushed, want)
+	}
+	if _, err := os.Stat(owed); err != nil {
+		t.Errorf("a refused flush must be recorded on disk again: %v", err)
+	}
+}
+
 func TestPruneFlushesTheRemovedEnvironment(t *testing.T) {
 	f := newFixture(t)
 	ps := newCacheFlushRecorder(t)
@@ -666,5 +768,8 @@ func TestNoPuppetServerMeansNoFlush(t *testing.T) {
 	}
 	if len(f.agent.pendingFlush) != 0 {
 		t.Errorf("flush disabled, yet %v is recorded as owed", f.agent.pendingFlush)
+	}
+	if _, err := os.Stat(f.layout.FlushOwedDir()); !os.IsNotExist(err) {
+		t.Errorf("flush disabled, yet %s exists (err=%v)", f.layout.FlushOwedDir(), err)
 	}
 }
