@@ -97,6 +97,31 @@ means losing catalog compilation entirely.
 Polls are jittered by up to 25% of the interval. Without it, a fleet restarted
 together polls in lockstep forever.
 
+## Running on demand
+
+Some sites require that code on a compiler changes only when an orchestrator
+such as OpenBolt or Choria says so. For those, stop and disable the
+`codavox-agent` service and have the orchestrator run a single reconciliation
+on each compiler:
+
+```console
+codavox agent --once
+```
+
+It reads the publisher from `/etc/codavox/config.yaml`, converges every
+environment the publisher serves, and exits 0 only when this node is fully
+converged, including the [environment cache flush](#a-failed-flush-is-a-failed-reconciliation).
+Anything else exits 1, so the orchestrator can report the node as failed.
+
+The network direction does not change. The compiler still opens the connection
+to the publisher; the orchestrator only decides when.
+
+This gives up the property described in [Pull, not push](#pull-not-push): a
+compiler that misses a trigger stays on its old version until the next one.
+Running `--once` beside the service is safe, since two agents on one node
+converge on the same result, so you can also keep the service running and use
+the orchestrator only to converge sooner after a deploy.
+
 ## The fetch is streamed, not staged
 
 The response body is piped straight into the extractor — nothing is written to
@@ -241,9 +266,14 @@ The flush stays owed and is retried on every poll until it succeeds, whether or
 not anything new was deployed. The usual reason it fails is that `puppetserver`
 is down or restarting, and a restarted server has an empty cache — so the
 retry is mostly for the case where the rule above is missing, where it keeps
-saying so until you add it. A restarted *agent* forgets what it owed; if you
-restart it after a failed flush, expire the cache yourself with the `DELETE`
-above or restart `puppetserver`.
+saying so until you add it.
+
+What the agent owes is kept on disk, as one empty file per environment in
+`/opt/puppetlabs/codavox/flush-owed/`. The agent writes the file *before* it
+moves the environment link and removes it once the flush lands, so a restarted
+agent, or the next `agent --once`, picks up a flush the last process did not
+finish. If the file cannot be written, the agent does not move the link: the
+environment stays on the version the server has cached, and the sync fails.
 
 Nothing about this needs the agent to run beside its server in any particular
 order. Bring a compiler up agent-first, as [Rollout](production.md#rollout)
