@@ -654,6 +654,31 @@ restart `puppetserver`.
 [`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
 pin `codavox::package_ensure: '0.11.1'`.
 
+### Upgrading to 0.12
+
+Nothing about the artifact format or the `code_id` derivation changed, so no
+environment is re-downloaded, and nothing has to change first. 0.12.0 is built
+with Go 1.26.11, which fixes a `net/http` vulnerability (GO-2026-6859) in the
+HTTP servers the publisher and the deploy server run, so upgrade promptly.
+
+**Certificates and the CA are re-read when they change.** The publisher, the
+agent, and the deploy server no longer need a restart after Puppet replaces
+the node's certificate, key, or CA bundle; see
+[Replacing certificates and extending the CA](#replacing-certificates-and-extending-the-ca).
+Earlier versions read those files only when they started. If the CA
+certificate was extended or a certificate re-issued under one and it was not
+restarted afterwards, the restart onto 0.12.0 is what makes it read the new
+files.
+
+**Files that cannot be used now refuse connections.** A daemon that finds the
+certificate, key, or CA bundle unreadable, or a certificate and key that do not
+match, fails the handshake or the request and logs why, where an earlier
+version carried on with what it had read at startup. The next connection reads
+the files again.
+
+[`puppet-codavox`](https://github.com/miharp/puppet-codavox) needs no change;
+pin `codavox::package_ensure: '0.12.0'`.
+
 ## Backup and rebuild
 
 Almost nothing here is precious, by design:
