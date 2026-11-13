@@ -111,6 +111,26 @@ Three properties follow from how it is implemented, and all are deliberate:
   believed. An estate that distributes no CRL sets `certificate_revocation` to
   `false` and says so out loud.
 
+### When Puppet replaces the certificates
+
+The publisher reuses the node's Puppet certificate, key, and CA bundle, and
+those files change under it: the server's certificate is re-issued, the CA
+certificate is given a later end date, a server is restored from a backup. The
+publisher re-reads all three when they change, as it does the CRL, and uses
+what is on disk for the next handshake. Nothing needs a restart.
+
+That matters most for the change that shows nothing at the time. An extended
+CA certificate keeps its key, so every certificate still verifies against the
+old copy, and a publisher that read the bundle only at startup would carry on
+until the old end date and then refuse every compiler at once.
+
+If the files cannot be read, or the certificate and key do not match, the
+handshake fails and the reason is logged. The publisher does not fall back to
+the copies it read before: trusting a CA bundle you have replaced would be the
+same silent downgrade as ignoring a CRL. The next handshake reads the files
+again, so a reader that lands between the writes of a new certificate and its
+key recovers by itself.
+
 ## Authorization: CA membership is not enough
 
 Requiring a certificate signed by the Puppet CA proves only that the peer is

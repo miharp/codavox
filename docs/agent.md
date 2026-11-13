@@ -31,6 +31,13 @@ codavox agent --publisher https://puppet.example.com:8150 --once
 | `--puppetserver` | `https://<certname>:8140` | The OpenVox Server on this node whose environment cache to expire |
 | `--flush-environment-cache` | `true` | Expire the environment in that server's cache after every swap |
 
+The agent reads its certificate, key, and CA bundle from `--ssldir`, and
+re-reads them when they change. A compiler whose certificate was re-issued, or
+whose copy of the CA certificate was replaced by an extended one, uses the new
+files on its next request and opens a new connection to do it, without a
+restart. If the files cannot be read, or the certificate and key do not match,
+that request fails with the reason and the next poll reads them again.
+
 ## What a reconciliation does
 
 1. Poll `/v1/environments` for the current `code_id` of each environment.

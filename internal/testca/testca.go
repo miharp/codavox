@@ -36,15 +36,37 @@ type CA struct {
 // New returns a new CA.
 func New(t *testing.T) *CA {
 	t.Helper()
+	return NewUntil(t, time.Now().Add(24*time.Hour))
+}
+
+// NewUntil returns a new CA whose certificate ends at notAfter. A time in the
+// past gives a CA that has expired, the state a daemon is left holding when the
+// CA certificate was extended on disk and the daemon never read the new one.
+func NewUntil(t *testing.T, notAfter time.Time) *CA {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return sign(t, key, notAfter)
+}
+
+// Extend returns this CA with a later end date and nothing else changed: the
+// same key, subject, and serial, which is how a Puppet CA certificate is
+// extended. Every certificate the CA has issued verifies against either copy.
+func (ca *CA) Extend(t *testing.T, notAfter time.Time) *CA {
+	t.Helper()
+	return sign(t, ca.Key, notAfter)
+}
+
+// sign self-signs a CA certificate for key.
+func sign(t *testing.T, key *ecdsa.PrivateKey, notAfter time.Time) *CA {
+	t.Helper()
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "Puppet CA"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotBefore:    time.Now().Add(-48 * time.Hour),
+		NotAfter:     notAfter,
 		IsCA:         true,
 		// crlSign is what a real Puppet CA carries, and without it Go refuses to
 		// verify a CRL this CA signed.
@@ -152,20 +174,47 @@ func (ca *CA) SSLDir(t *testing.T, certname, role string) string {
 		}
 	}
 
-	certPEM, keyPEM := ca.Issue(t, certname, role, false)
-	write := func(path string, data []byte) {
-		t.Helper()
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(filepath.Join(dir, "certs", certname+".pem"), certPEM)
-	write(filepath.Join(dir, "private_keys", certname+".pem"), keyPEM)
-	write(filepath.Join(dir, "certs", "ca.pem"), ca.PEM())
-
+	ca.Reissue(t, dir, certname, role)
+	ca.WriteCA(t, dir)
 	ca.WriteCRL(t, dir)
 
 	return dir
+}
+
+// Reissue gives a node a new certificate and key in place of the ones in its
+// ssldir, as re-enrolling it or regenerating a server's certificate does, and
+// returns the new certificate.
+func (ca *CA) Reissue(t *testing.T, ssldir, certname, role string) *x509.Certificate {
+	t.Helper()
+	certPEM, keyPEM := ca.Issue(t, certname, role, false)
+	install(t, filepath.Join(ssldir, "private_keys", certname+".pem"), keyPEM)
+	install(t, filepath.Join(ssldir, "certs", certname+".pem"), certPEM)
+	return ParseCert(t, certPEM)
+}
+
+// WriteCA installs this CA's certificate as a node's ca.pem, replacing any
+// existing one.
+func (ca *CA) WriteCA(t *testing.T, ssldir string) {
+	t.Helper()
+	install(t, filepath.Join(ssldir, "certs", "ca.pem"), ca.PEM())
+}
+
+// install writes a file in an ssldir and moves its mtime on from the one it
+// replaces. Two certificates of the same shape can be the same length and land
+// in the same coarse-grained timestamp, which would look unchanged to a stat; a
+// certificate replaced months later never does.
+func install(t *testing.T, path string, data []byte) {
+	t.Helper()
+	mtime := time.Now()
+	if fi, err := os.Stat(path); err == nil && !fi.ModTime().Before(mtime.Add(-time.Second)) {
+		mtime = fi.ModTime().Add(time.Second)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // CRL returns a signed, PEM-encoded revocation list naming the given

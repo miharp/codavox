@@ -71,7 +71,7 @@ Package map (`internal/`):
 | `seal` | Turns a staged tree into a deterministic `code_id` (hex hash) and a byte-identical gzipped tar artifact. Also extracts them — the one place untrusted bytes are parsed, so it is fuzzed. |
 | `publish` | `Store` seals staged environments; `Server` serves versions + artifacts over mutual TLS. Also the provenance log. |
 | `agent` | Compiler-side poll → fetch → verify → unpack → atomic symlink swap → reap. |
-| `puppetca` | Builds TLS config from the Puppet CA material already on each node, including CRL enforcement. codavox issues no certificates. |
+| `puppetca` | Builds TLS config from the Puppet CA material already on each node, including CRL enforcement, and re-reads that material when it changes on disk. codavox issues no certificates. |
 | `deploy` | Runs r10k to stage code, seals it, and signals the publisher to reseal. The single deploy path; every entry point funnels through it. |
 | `deployserver` | The deploy control plane: token-authenticated deploy API and secret-authenticated webhook over one queue, one worker, one history. |
 | `webhook` | Parses and authenticates GitHub, GitLab, and generic push payloads. Pure request mapping; holds no state. |

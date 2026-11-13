@@ -762,6 +762,24 @@ still cannot cascade into a fleet-wide deletion:
 level=WARN msg="publisher advertised no environments; skipping prune"
 ```
 
+## Replacing certificates and extending the CA
+
+The publisher, the agent, and the deploy server re-read the node's
+certificate, key, and CA bundle when Puppet replaces them, so none of these
+needs a restart of codavox:
+
+- **A re-issued certificate.** A compiler that was revoked and enrolled again,
+  or a server whose certificate was regenerated, presents the new certificate
+  on its next connection.
+- **An extended CA certificate.** Once the new bundle is on a node, by an agent
+  run or by `ovadm::extend_ca`, codavox there trusts it from the next
+  handshake. There is no old end date left to run into.
+- **A server restored from a backup.** The restored files are used as soon as
+  they are in place.
+
+OpenVox Server and OpenVoxDB still read these files only when they start, so
+the restarts their own procedures call for remain.
+
 ## Decommissioning a compiler
 
 ```console
