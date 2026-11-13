@@ -704,8 +704,11 @@ func agentRun(args []string) error {
 		opts.puppetserver = ""
 	}
 
+	// A transport that follows the ssldir, not a configuration read once: the
+	// agent runs for months, and Puppet re-issues certificates and extends the
+	// CA certificate under it.
 	paths := puppetca.Paths{SSLDir: opts.ssldir, CertName: opts.certname}
-	tlsConfig, err := paths.ClientTLS()
+	transport, err := paths.ClientTransport()
 	if err != nil {
 		return err
 	}
@@ -719,7 +722,7 @@ func agentRun(args []string) error {
 		},
 		Client: &http.Client{
 			Timeout:   30 * time.Minute, // environments can be large
-			Transport: &http.Transport{TLSClientConfig: tlsConfig},
+			Transport: transport,
 		},
 		Interval:    opts.interval,
 		Keep:        opts.keep,

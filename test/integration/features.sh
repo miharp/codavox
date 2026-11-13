@@ -558,7 +558,8 @@ fi
 # The certificate stays cryptographically valid and keeps its pp_role, so only
 # the CRL check stops it — and it must take effect without restarting anything.
 #
-# This runs last: the compiler cannot fetch code afterwards.
+# This and feature 16 run last: the compiler cannot fetch code until its
+# certificate is re-issued, which is what feature 16 then does.
 log "Feature 15 — revoking a compiler's certificate cuts off its access to code"
 before=$(code_id "$COMPILER" production)
 # Keep the output: when this failed in CI it was suppressed, so the log said
@@ -591,6 +592,47 @@ if docker exec "$PRIMARY" journalctl -u codavox-publish --no-pager 2>/dev/null \
 else
   fail "the publisher refused the compiler without saying it was revoked"
   docker exec "$PRIMARY" journalctl -u codavox-publish --no-pager -n 15 2>&1 | tail -15
+fi
+
+# Feature 16: a re-issued certificate gives the compiler its access back, and
+# nothing is restarted to get there.
+#
+# Both daemons have been running since provisioning with the SSL material they
+# read then, and the agent has polled over one keep-alive connection the whole
+# time. Puppet now replaces the compiler's certificate and key under it. An
+# agent that read them only at startup would go on presenting the revoked
+# certificate, on the connection it already holds, and stay cut off until
+# someone restarted it — so the same process ids at the end are part of the
+# assertion.
+log "Feature 16 — a re-issued certificate restores access, with nothing restarted"
+agent_pid=$(docker exec "$COMPILER" systemctl show -p MainPID --value codavox-agent)
+publish_pid=$(docker exec "$PRIMARY" systemctl show -p MainPID --value codavox-publish)
+before=$(code_id "$COMPILER" production)
+
+# `ca clean` removes the revoked certificate so the CA signs the next request
+# for the same certname; csr_attributes.yaml still asks for pp_role.
+if reissue_out=$(docker exec "$PRIMARY" /opt/puppetlabs/bin/puppetserver ca clean \
+  --certname compiler 2>&1) \
+  && reissue_out=$(docker exec "$COMPILER" bash -lc \
+    'puppet ssl clean && puppet ssl bootstrap --waitforcert 5' 2>&1); then
+  pass "re-issued the compiler's certificate"
+else
+  fail "could not re-issue the compiler's certificate: $reissue_out"
+fi
+
+bump_and_reseal
+if wait_for 60 "$COMPILER" "[ \"\$(codavox-code-id production)\" != '$before' ]"; then
+  pass "compiler converged again, $before -> $(code_id "$COMPILER" production)"
+else
+  fail "the compiler is still cut off after its certificate was re-issued (still $before)"
+  docker exec "$COMPILER" journalctl -u codavox-agent --no-pager -n 8 2>&1 | tail -8
+fi
+
+if [ "$(docker exec "$COMPILER" systemctl show -p MainPID --value codavox-agent)" = "$agent_pid" ] \
+  && [ "$(docker exec "$PRIMARY" systemctl show -p MainPID --value codavox-publish)" = "$publish_pid" ]; then
+  pass "neither the agent nor the publisher was restarted"
+else
+  fail "a codavox daemon restarted during the re-issue, so this proved nothing about re-reading"
 fi
 
 echo

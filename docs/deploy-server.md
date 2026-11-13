@@ -174,6 +174,9 @@ proxy that terminates TLS. Unlike the publisher's artifact API, this endpoint is
 not protected by mutual TLS; its shared secret and bearer token are the whole
 authentication.
 
+The certificate and its key are re-read when they change, so a re-issued
+certificate is presented on the next handshake without a restart.
+
 ## Endpoints
 
 - `POST /v1/deploys`, `GET /v1/deploys`, `GET /v1/deploys/{id}` — the deploy API.

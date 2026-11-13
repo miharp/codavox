@@ -14,6 +14,13 @@
 // every environment. PE takes the same approach — its Puppet module sets
 // ssl-crl-path to $ssldir/crl.pem on every service listener, and leaves
 // puppetserver on puppet.conf's certificate_revocation default of "chain".
+//
+// Reusing the material also means following it. The files belong to Puppet,
+// which replaces them without telling anyone: a certificate is re-issued, the
+// CA certificate is given a later end date, a server is restored from a
+// backup. The daemons therefore re-read the certificate, the key, and the CA
+// bundle when they change on disk, as they do the CRL, so that none of those
+// needs a restart of codavox to take effect.
 package puppetca
 
 import (
@@ -23,6 +30,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 )
@@ -64,36 +72,37 @@ func (p Paths) CACert() string { return filepath.Join(p.SSLDir, "certs", "ca.pem
 // CRL returns the certificate revocation list path.
 func (p Paths) CRL() string { return filepath.Join(p.SSLDir, "crl.pem") }
 
-// Load reads the CA certificate pool and the node's keypair.
+// Load reads the CA certificate pool and the node's keypair, once.
 func (p Paths) Load() (tls.Certificate, *x509.CertPool, error) {
-	cert, pool, _, err := p.load()
-	return cert, pool, err
+	m, err := p.load()
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	return m.cert, m.pool, nil
 }
 
-// load additionally returns the parsed CA certificates, which CRL verification
-// needs: a pool can only build chains, and checking a CRL's signature requires
-// the issuing certificate itself.
-func (p Paths) load() (tls.Certificate, *x509.CertPool, []*x509.Certificate, error) {
+// load reads the node's keypair and the CA bundle as they are on disk.
+func (p Paths) load() (*material, error) {
 	cert, err := tls.LoadX509KeyPair(p.Cert(), p.Key())
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("loading keypair for %s: %w", p.CertName, err)
+		return nil, fmt.Errorf("loading keypair for %s: %w", p.CertName, err)
 	}
 
 	pemBytes, err := os.ReadFile(p.CACert())
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("reading CA certificate: %w", err)
+		return nil, fmt.Errorf("reading CA certificate: %w", err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pemBytes) {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("no certificates found in %s", p.CACert())
+		return nil, fmt.Errorf("no certificates found in %s", p.CACert())
 	}
 
 	cas, err := parseCertificates(pemBytes)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("parsing %s: %w", p.CACert(), err)
+		return nil, fmt.Errorf("parsing %s: %w", p.CACert(), err)
 	}
 
-	return cert, pool, cas, nil
+	return &material{cert: cert, pool: pool, cas: cas}, nil
 }
 
 // parseCertificates decodes every CERTIFICATE block in a PEM bundle.
@@ -161,6 +170,11 @@ type ServerPolicy struct {
 // with keep-alive will reuse that connection long after a certificate has been
 // revoked. It is nil only when revocation is disabled, and Check tolerates a
 // nil receiver so it can be wired in unconditionally.
+//
+// The configuration follows the ssldir: each handshake uses the certificate,
+// key, and CA bundle on disk at that moment, so a re-issued certificate or an
+// extended CA certificate takes effect without a restart. If they cannot be
+// read, the handshake fails with the reason.
 func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) {
 	if len(policy.AllowedRoles) == 0 && len(policy.AllowedCertnames) == 0 {
 		return nil, nil, errors.New("at least one allowed pp_role or certname is required")
@@ -170,7 +184,7 @@ func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) 
 		mode = RevocationChain
 	}
 
-	cert, pool, cas, err := p.load()
+	src, first, err := p.open()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -190,7 +204,7 @@ func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) 
 	if mode != RevocationDisabled {
 		// PE points ssl-crl-path at $ssldir/crl.pem on every service listener;
 		// this is the same file.
-		crl, err := newCRLChecker(p.CRL(), cas)
+		crl, err := newCRLChecker(p.CRL(), src.issuers)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -200,16 +214,19 @@ func (p Paths) ServerTLS(policy ServerPolicy) (*tls.Config, *Revocation, error) 
 		})
 	}
 
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ClientCAs:    pool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		MinVersion:   tls.VersionTLS12,
-		// VerifyConnection, not VerifyPeerCertificate: the latter is skipped
-		// entirely on resumed sessions, so a peer that handshook once could
-		// keep reconnecting without the role ever being rechecked.
-		VerifyConnection: verify,
-	}, rev, nil
+	return src.serverConfig(first, func(m *material) *tls.Config {
+		return &tls.Config{
+			Certificates: []tls.Certificate{m.cert},
+			ClientCAs:    m.pool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			MinVersion:   tls.VersionTLS12,
+			NextProtos:   serverProtos,
+			// VerifyConnection, not VerifyPeerCertificate: the latter is skipped
+			// entirely on resumed sessions, so a peer that handshook once could
+			// keep reconnecting without the role ever being rechecked.
+			VerifyConnection: verify,
+		}
+	}), rev, nil
 }
 
 // chainVerifiers runs each check in order, stopping at the first failure.
@@ -232,29 +249,50 @@ func chainVerifiers(fns ...func(tls.ConnectionState) error) func(tls.ConnectionS
 // shared secret rather than by mutual TLS. The publisher's artifact API uses
 // ServerTLS instead; this is deliberately weaker and belongs only where the
 // caller is authenticated another way.
+//
+// Like ServerTLS, it follows the ssldir: each handshake presents the
+// certificate on disk at that moment.
 func (p Paths) ServerCertTLS() (*tls.Config, error) {
-	cert, _, err := p.Load()
+	src, first, err := p.open()
 	if err != nil {
 		return nil, err
 	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	}, nil
+	return src.serverConfig(first, func(m *material) *tls.Config {
+		return &tls.Config{
+			Certificates: []tls.Certificate{m.cert},
+			MinVersion:   tls.VersionTLS12,
+			NextProtos:   serverProtos,
+		}
+	}), nil
 }
 
-// ClientTLS builds a TLS configuration for a compiler fetching artifacts.
+// ClientTLS builds a TLS configuration for a compiler fetching artifacts, from
+// the material on disk now.
+//
+// It is a single read, which suits a command that makes its requests and
+// exits. A process that keeps running uses ClientTransport, so that it does
+// not go on with a certificate or a CA bundle that has since been replaced.
 func (p Paths) ClientTLS() (*tls.Config, error) {
-	cert, pool, err := p.Load()
+	m, err := p.load()
 	if err != nil {
 		return nil, err
 	}
+	return clientConfig(m), nil
+}
 
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
-		MinVersion:   tls.VersionTLS12,
-	}, nil
+// ClientTransport returns an HTTP transport for a long-running compiler-side
+// process, configured as ClientTLS configures one and following the ssldir.
+//
+// Each request is sent with the certificate, key, and CA bundle on disk at
+// that moment. When they have changed, the connections opened with the old
+// ones are dropped, so the next request handshakes again. If they cannot be
+// read, the request fails with the reason.
+func (p Paths) ClientTransport() (http.RoundTripper, error) {
+	src, first, err := p.open()
+	if err != nil {
+		return nil, err
+	}
+	return &reloadingTransport{src: src, from: first, base: newTransport(first)}, nil
 }
 
 // ErrNotAuthorized means the peer authenticated against the CA but is not

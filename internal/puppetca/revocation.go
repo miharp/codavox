@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"os"
 	"sync"
-	"time"
 )
 
 // RevocationMode selects how far up a peer's chain revocation is checked.
@@ -98,8 +97,11 @@ func (r *Revocation) Check(cs *tls.ConnectionState) error {
 // `puppetserver ca revoke` expects the compiler to lose access without also
 // having to restart the publisher on every node.
 type crlChecker struct {
-	path    string
-	issuers []*x509.Certificate
+	path string
+	// issuers returns the CA certificates to verify the CRL against, read when
+	// the CRL is: a CA bundle replaced along with its CRL must be the one the
+	// new CRL is checked against.
+	issuers func() ([]*x509.Certificate, error)
 
 	mu      sync.Mutex
 	stamp   fileStamp
@@ -107,27 +109,12 @@ type crlChecker struct {
 	loaded  bool
 }
 
-// fileStamp is the cheap change signal: a stat per handshake, and a re-parse
-// only when the file is actually different.
-type fileStamp struct {
-	modTime time.Time
-	size    int64
-}
-
-func statCRL(path string) (fileStamp, error) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return fileStamp{}, err
-	}
-	return fileStamp{modTime: fi.ModTime(), size: fi.Size()}, nil
-}
-
 // newCRLChecker loads the CRL once so a missing or malformed file fails at
 // startup rather than on the first compiler that connects. Refusing to start is
 // deliberate: silently serving code to revoked nodes because a file was
 // unreadable is the kind of quiet downgrade this project exists to avoid. An
 // estate with no CRL sets certificate_revocation to false and says so.
-func newCRLChecker(path string, issuers []*x509.Certificate) (*crlChecker, error) {
+func newCRLChecker(path string, issuers func() ([]*x509.Certificate, error)) (*crlChecker, error) {
 	c := &crlChecker{path: path, issuers: issuers}
 	if err := c.reload(); err != nil {
 		return nil, err
@@ -137,7 +124,7 @@ func newCRLChecker(path string, issuers []*x509.Certificate) (*crlChecker, error
 
 // reload parses the CRL file into a revoked-serial set.
 func (c *crlChecker) reload() error {
-	stamp, err := statCRL(c.path)
+	stamp, err := statFile(c.path)
 	if err != nil {
 		return fmt.Errorf("reading CRL %s: %w", c.path, err)
 	}
@@ -145,6 +132,11 @@ func (c *crlChecker) reload() error {
 	pemBytes, err := os.ReadFile(c.path) // #nosec G304 -- path derived from the node's ssldir
 	if err != nil {
 		return fmt.Errorf("reading CRL %s: %w", c.path, err)
+	}
+
+	issuers, err := c.issuers()
+	if err != nil {
+		return err
 	}
 
 	revoked := map[string]bool{}
@@ -167,7 +159,7 @@ func (c *crlChecker) reload() error {
 		// Verify the CRL against the CA that signed it. An unverified CRL is
 		// worth nothing: anyone who can write the file could otherwise revoke
 		// every compiler, or un-revoke themselves.
-		issuer, err := c.issuerFor(list)
+		issuer, err := c.issuerFor(list, issuers)
 		if err != nil {
 			return err
 		}
@@ -194,8 +186,8 @@ func (c *crlChecker) reload() error {
 }
 
 // issuerFor finds the CA certificate that issued a CRL.
-func (c *crlChecker) issuerFor(list *x509.RevocationList) (*x509.Certificate, error) {
-	for _, ca := range c.issuers {
+func (c *crlChecker) issuerFor(list *x509.RevocationList, issuers []*x509.Certificate) (*x509.Certificate, error) {
+	for _, ca := range issuers {
 		if ca.Subject.String() == list.Issuer.String() {
 			return ca, nil
 		}
@@ -235,7 +227,7 @@ func (c *crlChecker) check(certs []*x509.Certificate) error {
 
 // refreshIfChanged re-parses the CRL when the file's mtime or size has moved.
 func (c *crlChecker) refreshIfChanged() error {
-	stamp, err := statCRL(c.path)
+	stamp, err := statFile(c.path)
 	if err != nil {
 		return fmt.Errorf("reading CRL %s: %w", c.path, err)
 	}
